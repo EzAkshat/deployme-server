@@ -1,0 +1,79 @@
+name: Backend CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      NODE_ENV: test
+      DOTENV_CONFIG_PATH: ${{ github.workspace }}/.env.test
+      DOTENV_CONFIG_QUIET: "true"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Install tested pnpm version
+        run: npm install --global pnpm@12.6.0
+
+      - name: Show tool versions
+        run: |
+          node --version
+          pnpm --version
+          docker compose version
+
+      - name: Prepare isolated test configuration
+        run: cp .env.test.example .env.test
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm exec prisma generate
+
+      - name: Start test PostgreSQL and Redis
+        run: pnpm test:services:up
+
+      - name: Apply migrations to test database
+        run: pnpm test:db:migrate
+
+      - name: Typecheck application
+        run: pnpm typecheck
+
+      - name: Typecheck tests
+        run: pnpm typecheck:test
+
+      - name: Run tests in parallel
+        run: pnpm test
+
+      - name: Build backend
+        run: pnpm build
+
+      - name: Show test-service logs on failure
+        if: failure()
+        run: docker compose -f compose.test.yml logs --no-color --tail=100
+
+      - name: Remove CI test services and volumes
+        if: always()
+        run: docker compose -f compose.test.yml down --volumes

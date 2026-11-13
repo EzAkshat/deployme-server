@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+!.env.test.example
+# Build output and test coverage
+dist/
+coverage/
+*.tsbuildinfo
+
+# Generated Prisma client
+/src/generated/prisma/
+
+# Local backups
+*.bak
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini

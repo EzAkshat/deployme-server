@@ -1,0 +1,442 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                        Int                    @id @default(autoincrement())
+  username                  String                 @unique
+  name                      String
+  email                     String                 @unique
+  platformRole              PlatformRole           @default(USER)
+  createdAt                 DateTime               @default(now()) @db.Timestamp(3)
+  onboardingCompletedAt     DateTime?              @db.Timestamp(3)
+  githubConnection          GitHubConnection?
+  invitationsSent           TeamInvitation[]       @relation("TeamInvitationInviter")
+  invitationsAccepted       TeamInvitation[]       @relation("TeamInvitationAccepter")
+  sessions                  Session[]
+  teamMemberships           TeamMembership[]
+  personalProjects          Project[]              @relation("PersonalProjectOwner")
+  projectShares             ProjectShare[]         @relation("ProjectShareUser")
+  projectImportRequests     ProjectImportRequest[]
+  projectPermissionsGranted ProjectShare[]         @relation("ProjectShareGrantedBy")
+
+  administratorAccessRequested AdministratorAccessGrant[] @relation("AdminAccessRequester")
+  administratorAccessApproved  AdministratorAccessGrant[] @relation("AdminAccessApprover")
+  administratorAccessUsed      AdministratorAccessGrant[] @relation("AdminAccessUser")
+  administratorAccessAudits    AdministratorAccessAudit[] @relation("AdminAccessAuditActor")
+}
+
+model GitHubConnection {
+  id                    String    @id @default(cuid())
+  userId                Int       @unique
+  githubUserId          BigInt    @unique
+  githubLogin           String    @db.VarChar(255)
+  accessTokenEncrypted  String
+  refreshTokenEncrypted String?
+  accessTokenExpiresAt  DateTime? @db.Timestamp(3)
+  refreshTokenExpiresAt DateTime? @db.Timestamp(3)
+  createdAt             DateTime  @default(now()) @db.Timestamp(3)
+  updatedAt             DateTime  @updatedAt @db.Timestamp(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model OtpChallenge {
+  id           String    @id @default(cuid())
+  email        String
+  codeHash     String
+  expiresAt    DateTime  @db.Timestamp(3)
+  attemptCount Int       @default(0)
+  consumedAt   DateTime? @db.Timestamp(3)
+  createdAt    DateTime  @default(now()) @db.Timestamp(3)
+
+  @@index([email, createdAt])
+  @@index([expiresAt])
+}
+
+model GitHubAuthorizationState {
+  id         String    @id @default(cuid())
+  stateHash  String    @unique
+  sessionId  String
+  expiresAt  DateTime  @db.Timestamp(3)
+  consumedAt DateTime? @db.Timestamp(3)
+  createdAt  DateTime  @default(now()) @db.Timestamp(3)
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([expiresAt])
+}
+
+model Session {
+  id                        String                     @id @default(cuid())
+  userId                    Int
+  tokenHash                 String                     @unique
+  createdAt                 DateTime                   @default(now()) @db.Timestamp(3)
+  expiresAt                 DateTime                   @db.Timestamp(3)
+  revokedAt                 DateTime?                  @db.Timestamp(3)
+  githubAuthorizationStates GitHubAuthorizationState[]
+  user                      User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+model Team {
+  id        String   @id @default(cuid())
+  name      String   @db.VarChar(100)
+  slug      String   @unique @db.VarChar(100)
+  createdAt DateTime @default(now()) @db.Timestamp(3)
+  updatedAt DateTime @updatedAt @db.Timestamp(3)
+
+  invitations TeamInvitation[]
+  memberships TeamMembership[]
+  projects    Project[]
+}
+
+model TeamMembership {
+  id       String   @id @default(cuid())
+  teamId   String
+  userId   Int
+  role     TeamRole @default(MEMBER)
+  joinedAt DateTime @default(now()) @db.Timestamp(3)
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@index([teamId, role])
+}
+
+model TeamInvitation {
+  id               String               @id @default(cuid())
+  teamId           String
+  email            String
+  role             TeamRole             @default(MEMBER)
+  status           TeamInvitationStatus @default(PENDING)
+  tokenHash        String               @unique
+  invitedByUserId  Int
+  acceptedByUserId Int?
+  createdAt        DateTime             @default(now()) @db.Timestamp(3)
+  expiresAt        DateTime             @db.Timestamp(3)
+  acceptedAt       DateTime?            @db.Timestamp(3)
+  revokedAt        DateTime?            @db.Timestamp(3)
+
+  team       Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  invitedBy  User  @relation("TeamInvitationInviter", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+  acceptedBy User? @relation("TeamInvitationAccepter", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([teamId, email, status])
+  @@index([email, status])
+  @@index([expiresAt])
+}
+
+model Project {
+  id              String                @id @default(cuid())
+  teamId          String?
+  ownerUserId     Int?
+  name            String                @db.VarChar(100)
+  slug            String                @db.VarChar(100)
+  rootDirectory   String                @default(".") @db.VarChar(255)
+  installCommand  String                @default("npm install") @db.VarChar(500)
+  buildCommand    String                @default("npm run build") @db.VarChar(500)
+  outputDirectory String                @default("dist") @db.VarChar(255)
+  spaFallback     Boolean               @default(false)
+  createdAt       DateTime              @default(now()) @db.Timestamp(3)
+  updatedAt       DateTime              @updatedAt @db.Timestamp(3)
+  archivedAt      DateTime?             @db.Timestamp(3)
+  gitRepository   GitRepository?
+  importRequest   ProjectImportRequest?
+  team            Team?                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  ownerUser       User?                 @relation("PersonalProjectOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  shares          ProjectShare[]
+  deployments     Deployment[]
+  secrets         ProjectSecret[]
+  subdomain       String?               @unique @db.VarChar(63)
+  archiveOutbox   ProjectArchiveOutbox?
+
+  @@unique([teamId, slug])
+  @@unique([ownerUserId, slug])
+  @@index([teamId, archivedAt])
+  @@index([ownerUserId, archivedAt])
+}
+
+model ProjectArchiveOutbox {
+  id            String    @id @default(cuid())
+  projectId     String    @unique
+  createdAt     DateTime  @default(now()) @db.Timestamp(3)
+  processedAt   DateTime? @db.Timestamp(3)
+  claimedAt     DateTime? @db.Timestamp(3)
+  claimToken    String?
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now()) @db.Timestamp(3)
+  lastError     String?   @db.Text
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([processedAt, nextAttemptAt])
+}
+
+model ProjectShare {
+  id              String   @id @default(cuid())
+  projectId       String
+  userId          Int
+  grantedByUserId Int
+  canView         Boolean  @default(true)
+  canDeploy       Boolean  @default(false)
+  canManage       Boolean  @default(false)
+  createdAt       DateTime @default(now()) @db.Timestamp(3)
+  updatedAt       DateTime @updatedAt @db.Timestamp(3)
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User    @relation("ProjectShareUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy User    @relation("ProjectShareGrantedBy", fields: [grantedByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([projectId, userId])
+  @@index([userId, canView])
+  @@index([projectId, canDeploy])
+}
+
+model Deployment {
+  id                  String                    @id @default(cuid())
+  projectId           String
+  commitSha           String?                   @db.VarChar(40)
+  status              DeploymentStatus          @default(PENDING)
+  failureReason       String?                   @db.VarChar(255)
+  importRequest       ProjectImportRequest?
+  processingToken     String?
+  processingStartedAt DateTime?                 @db.Timestamp(3)
+  createdAt           DateTime                  @default(now()) @db.Timestamp(3)
+  updatedAt           DateTime                  @updatedAt @db.Timestamp(3)
+  artifactBucket      String?
+  artifactPrefix      String?
+  publishedAt         DateTime?                 @db.Timestamp(3)
+  project             Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  buildSettings       Json?
+  logText             String                    @default("") @db.Text
+  logBytes            Int                       @default(0)
+  logTruncated        Boolean                   @default(false)
+  logUpdatedAt        DateTime?                 @db.Timestamp(3)
+  buildStartedAt      DateTime?                 @db.Timestamp(3)
+  buildFinishedAt     DateTime?                 @db.Timestamp(3)
+  artifactFileCount   Int?
+  artifactSizeBytes   Int?
+  processingJobId     String?
+  processingAttempt   Int                       @default(0)
+  resourceUsage       DeploymentResourceUsage[]
+
+  @@index([projectId, createdAt])
+  @@index([status, createdAt])
+  @@index([status, processingStartedAt])
+}
+
+model DeploymentResourceUsage {
+  id              String @id @default(cuid())
+  deploymentId    String
+  processingToken String @unique
+  executionNumber Int
+
+  startedAt    DateTime  @default(now()) @db.Timestamp(3)
+  finishedAt   DateTime? @db.Timestamp(3)
+  lastSampleAt DateTime? @db.Timestamp(3)
+
+  cpuTimeMs               Float?
+  peakObservedMemoryBytes Float?
+  sampleCount             Int    @default(0)
+
+  collectionCompleted Boolean @default(false)
+
+  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  @@index([deploymentId, startedAt])
+}
+
+model DeploymentOutbox {
+  id           String    @id @default(cuid())
+  deploymentId String
+  eventType    String    @db.VarChar(100)
+  payload      Json
+  createdAt    DateTime  @default(now()) @db.Timestamp(3)
+  processedAt  DateTime? @db.Timestamp(3)
+  claimedAt    DateTime? @db.Timestamp(3)
+  claimToken   String?
+  attempts     Int       @default(0)
+  lastError    String?
+
+  @@index([processedAt, createdAt])
+  @@index([claimedAt, processedAt, createdAt])
+  @@index([deploymentId])
+}
+
+model ProjectSecret {
+  id              String   @id @default(cuid())
+  projectId       String
+  name            String   @db.VarChar(255)
+  valueCiphertext String
+  createdAt       DateTime @default(now()) @db.Timestamp(3)
+  updatedAt       DateTime @updatedAt @db.Timestamp(3)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, name])
+  @@index([projectId])
+}
+
+model AdministratorAccessGrant {
+  id                  String                    @id @default(cuid())
+  requesterUserId     Int
+  approverUserId      Int
+  administratorUserId Int
+  projectId           String?
+  reason              String                    @db.VarChar(1000)
+  scope               AdministratorAccessScope
+  status              AdministratorAccessStatus @default(PENDING)
+  requestedAt         DateTime                  @default(now()) @db.Timestamp(3)
+  approvedAt          DateTime?                 @db.Timestamp(3)
+  expiresAt           DateTime?                 @db.Timestamp(3)
+  revokedAt           DateTime?                 @db.Timestamp(3)
+
+  requester     User                       @relation("AdminAccessRequester", fields: [requesterUserId], references: [id], onDelete: Restrict)
+  approver      User                       @relation("AdminAccessApprover", fields: [approverUserId], references: [id], onDelete: Restrict)
+  administrator User                       @relation("AdminAccessUser", fields: [administratorUserId], references: [id], onDelete: Restrict)
+  audits        AdministratorAccessAudit[]
+
+  @@index([administratorUserId, status, expiresAt])
+  @@index([requesterUserId, requestedAt])
+  @@index([projectId, status])
+}
+
+model AdministratorAccessAudit {
+  id          String                         @id @default(cuid())
+  grantId     String
+  actorUserId Int
+  action      AdministratorAccessAuditAction
+  details     Json?
+  createdAt   DateTime                       @default(now()) @db.Timestamp(3)
+
+  grant AdministratorAccessGrant @relation(fields: [grantId], references: [id], onDelete: Restrict)
+  actor User                     @relation("AdminAccessAuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([grantId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+enum TeamInvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+enum TeamRole {
+  OWNER
+  MANAGER
+  MEMBER
+}
+
+enum PlatformRole {
+  SUPER_ADMIN
+  SITE_ADMIN
+  USER
+}
+
+enum DeploymentStatus {
+  PENDING
+  QUEUED
+  BUILDING
+  READY
+  FAILED
+  CANCELLED
+}
+
+enum AdministratorAccessScope {
+  PROJECT_METADATA
+  PROJECT_PRIVATE_DATA
+  PROJECT_SECRETS
+  DEPLOYMENT_DETAILS
+}
+
+enum AdministratorAccessStatus {
+  PENDING
+  APPROVED
+  DENIED
+  REVOKED
+  EXPIRED
+}
+
+enum AdministratorAccessAuditAction {
+  REQUESTED
+  APPROVED
+  DENIED
+  ACCESSED
+  REVOKED
+  EXPIRED
+}
+
+model GitHubAppInstallation {
+  id             String   @id @default(cuid())
+  installationId BigInt   @unique
+  accountLogin   String   @db.VarChar(255)
+  accountType    String   @db.VarChar(50)
+  createdAt      DateTime @default(now()) @db.Timestamp(3)
+  updatedAt      DateTime @updatedAt @db.Timestamp(3)
+
+  repositories GitRepository[]
+}
+
+model GitRepository {
+  id                   String   @id @default(cuid())
+  projectId            String   @unique
+  installationRecordId String
+  providerRepositoryId BigInt   @unique
+  owner                String   @db.VarChar(255)
+  name                 String   @db.VarChar(255)
+  defaultBranch        String   @db.VarChar(255)
+  productionBranch     String   @default("main") @db.VarChar(255)
+  connectedAt          DateTime @default(now()) @db.Timestamp(3)
+  updatedAt            DateTime @updatedAt @db.Timestamp(3)
+
+  project      Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  installation GitHubAppInstallation @relation(fields: [installationRecordId], references: [id], onDelete: Restrict)
+
+  @@index([installationRecordId])
+  @@index([owner, name])
+}
+
+model GitHubWebhookDelivery {
+  id          String    @id @default(cuid())
+  deliveryId  String    @unique @db.VarChar(255)
+  event       String    @db.VarChar(100)
+  receivedAt  DateTime  @default(now()) @db.Timestamp(3)
+  processedAt DateTime? @db.Timestamp(3)
+  status      String    @default("RECEIVED") @db.VarChar(50)
+  error       String?
+
+  @@index([status, receivedAt])
+}
+
+model ProjectImportRequest {
+  id             String   @id @default(cuid())
+  userId         Int
+  idempotencyKey String   @db.VarChar(128)
+  requestHash    String   @db.VarChar(64)
+  projectId      String   @unique
+  deploymentId   String   @unique
+  createdAt      DateTime @default(now()) @db.Timestamp(3)
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, idempotencyKey])
+}
+
+model DeploymentQuotaLock {
+  scopeKey String @id @db.VarChar(160)
+  revision BigInt @default(0)
+}
