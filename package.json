@@ -17,7 +17,9 @@
     "worker:deployment": "tsx --env-file-if-exists=.env src/workers/deployment-worker.ts",
     "test:db:migrate": "node scripts/test-runner.mjs migrate",
     "test:services:up": "docker compose -f compose.test.yml up -d --wait",
-    "test:services:stop": "docker compose -f compose.test.yml stop"
+    "test:services:stop": "docker compose -f compose.test.yml stop",
+    "start:deployment": "node --env-file-if-exists=.env dist/workers/deployment-worker.js",
+    "start:outbox": "node --env-file-if-exists=.env dist/workers/outbox-dispatcher.js"
   },
   "keywords": [],
   "author": "",
@@ -31,6 +33,7 @@
     "bullmq": "^6.4.0",
     "cors": "^2.8.6",
     "dockerode": "^5.0.1",
+    "dotenv": "^18.0.8",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
     "ioredis": "^6.0.0",
@@ -52,7 +55,6 @@
     "@types/supertest": "^7.2.1",
     "@types/tar-stream": "^3.1.5",
     "@types/yauzl": "^3.4.0",
-    "dotenv": "^18.0.8",
     "pino-pretty": "^13.2.0",
     "prettier": "^3.9.10",
     "prisma": "7.10.0",

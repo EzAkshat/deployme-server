@@ -9,9 +9,14 @@ import { cleanupAbandonedBuildContainers } from '../services/build-container-cle
 import { processProjectArchiveOutbox } from '../services/project-archive-outbox.js';
 import { cleanupAbandonedBuildTempDirectories } from '../services/build-temp-cleanup.js';
 import { startWorkerHeartbeat } from '../services/worker-presence.js';
+import { performance } from 'node:perf_hooks';
 
 const POLL_INTERVAL_MS = 2_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+// Operational threshold for detecting a poll that stops making progress.
+const POLL_PROGRESS_TIMEOUT_MS = 5 * 60_000;
+
+let lastCompletedPollAt: number | undefined;
 
 let stopping = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -19,7 +24,11 @@ let activePoll: Promise<void> | undefined;
 
 const heartbeat = startWorkerHeartbeat(
   'outbox',
-  () => !stopping && redisConnection.status === 'ready',
+  () =>
+    !stopping &&
+    redisConnection.status === 'ready' &&
+    lastCompletedPollAt !== undefined &&
+    performance.now() - lastCompletedPollAt < POLL_PROGRESS_TIMEOUT_MS,
 );
 
 async function poll(): Promise<void> {
@@ -79,6 +88,8 @@ async function poll(): Promise<void> {
   } else {
     console.error('Build temporary-directory scan failed:', tempCleanupResult.reason);
   }
+  lastCompletedPollAt = performance.now();
+
   if (!stopping) {
     timer = setTimeout(() => {
       timer = undefined;
@@ -86,11 +97,10 @@ async function poll(): Promise<void> {
     }, POLL_INTERVAL_MS);
   }
 }
-
 async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
-
   stopping = true;
+
   console.log(`Received ${signal}; stopping outbox dispatcher...`);
 
   if (timer) {
@@ -103,23 +113,33 @@ async function shutdown(signal: string): Promise<void> {
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS);
 
-  timeout.unref();
+  let failed = false;
 
+  async function attempt(
+    resource: string,
+    cleanup: () => unknown | Promise<unknown>,
+  ): Promise<void> {
     try {
-    await heartbeat.stop();
-    await activePoll;
-    r2.destroy();
-    await deploymentQueue.close();
-    await redisConnection.quit();
-    await prisma.$disconnect();
-
-    clearTimeout(timeout);
-    process.exit(0);
-  } catch (error) {
-    console.error('Dispatcher shutdown failed:', error);
-    clearTimeout(timeout);
-    process.exit(1);
+      await cleanup();
+    } catch (error: unknown) {
+      failed = true;
+      console.error(`Dispatcher shutdown failed: ${resource}`, error);
+    }
   }
+
+  await attempt('heartbeat', () => heartbeat.stop());
+
+  // Let the current poll settle before closing its dependencies.
+  await attempt('active poll', () => activePoll);
+
+  await attempt('deployment queue', () => deploymentQueue.close());
+  await attempt('Redis quit', () => redisConnection.quit());
+  await attempt('Redis disconnect', () => redisConnection.disconnect());
+  await attempt('database', () => prisma.$disconnect());
+  await attempt('R2', () => r2.destroy());
+
+  clearTimeout(timeout);
+  process.exit(failed ? 1 : 0);
 }
 
 process.once('SIGINT', () => void shutdown('SIGINT'));

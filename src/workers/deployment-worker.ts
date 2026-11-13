@@ -18,9 +18,11 @@ import { claimDeploymentExecution, DEPLOYMENT_LOCK_DURATION_MS } from '../servic
 import { createBuildTempDirectory } from '../services/build-temp-directory.js';
 import { startWorkerHeartbeat } from '../services/worker-presence.js';
 import { finalizeDeployment } from '../services/deployment-finalization.js';
+import { r2 } from '../config/r2.js';
 
-const SHUTDOWN_TIMEOUT_MS = 10_000;
-
+// Allow active deployments to finish during planned shutdown.
+// Exit earlier once worker.close() and resource cleanup complete.
+const SHUTDOWN_TIMEOUT_MS = 30 * 60_000;
 function resolveProjectRoot(sourceDirectory: string, rootDirectory: string): string {
   if (
     rootDirectory.trim().length === 0 ||
@@ -404,6 +406,7 @@ const heartbeat = startWorkerHeartbeat(
     worker.isRunning() &&
     !worker.isPaused(),
 );
+
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -415,21 +418,32 @@ async function shutdown(signal: string): Promise<void> {
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS);
 
-  timeout.unref();
+  let failed = false;
 
+  async function attempt(
+    resource: string,
+    cleanup: () => unknown | Promise<unknown>,
+  ): Promise<void> {
     try {
-    await heartbeat.stop();
-    await worker.close();
-    await redisConnection.quit();
-    await prisma.$disconnect();
-
-    clearTimeout(timeout);
-    process.exit(0);
-  } catch (error) {
-    console.error('Deployment worker shutdown failed:', error);
-    clearTimeout(timeout);
-    process.exit(1);
+      await cleanup();
+    } catch (error: unknown) {
+      failed = true;
+      console.error(`Deployment worker shutdown failed: ${resource}`, error);
+    }
   }
+
+  await attempt('heartbeat', () => heartbeat.stop());
+
+  // Stop taking jobs and wait for active jobs before closing dependencies.
+  await attempt('worker', () => worker.close());
+
+  await attempt('Redis quit', () => redisConnection.quit());
+  await attempt('Redis disconnect', () => redisConnection.disconnect());
+  await attempt('database', () => prisma.$disconnect());
+  await attempt('R2', () => r2.destroy());
+
+  clearTimeout(timeout);
+  process.exit(failed ? 1 : 0);
 }
 
 process.once('SIGINT', () => void shutdown('SIGINT'));

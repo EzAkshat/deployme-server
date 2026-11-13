@@ -10,15 +10,26 @@ import { stopWorkerPresenceChecks } from './services/worker-presence.js';
 
 const SHUTDOWN_TIMEOUT_MS = 15_000;
 
-const server = app.listen(env.PORT, () => {
-  console.log(
-    `DeployMe API listening on port ${env.PORT} (${env.NODE_ENV})`,
-  );
+const server = app.listen(env.PORT, (error?: Error) => {
+  if (error) {
+    handleServerError(error);
+    return;
+  }
+
+  console.log(`DeployMe API listening on port ${env.PORT} (${env.NODE_ENV})`);
 });
 
+server.on('error', handleServerError);
+
+function handleServerError(error: Error): void {
+  if (stopping) return;
+
+  logger.error({ err: error }, 'DeployMe API server failed');
+  void shutdown('server error', 1);
+}
 let stopping = false;
 
-async function shutdown(signal: string): Promise<void> {
+async function shutdown(signal: string, exitCode = 0): Promise<void> {
   if (stopping) return;
 
   stopping = true;
@@ -37,41 +48,35 @@ async function shutdown(signal: string): Promise<void> {
   }, SHUTDOWN_TIMEOUT_MS);
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
 
-        resolve();
+          resolve();
+        });
+
+        server.closeIdleConnections();
       });
-
-      server.closeIdleConnections();
-    });
-
-    const results = await Promise.allSettled([
-      deploymentQueue.close(),
-      prisma.$disconnect(),
-    ]);
+    }
+    const results = await Promise.allSettled([deploymentQueue.close(), prisma.$disconnect()]);
 
     redisConnection.disconnect();
     r2.destroy();
 
     const failures = results.filter(
-      (result): result is PromiseRejectedResult =>
-        result.status === 'rejected',
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
     );
 
     for (const failure of failures) {
-      logger.error(
-        { err: failure.reason },
-        'API resource shutdown failed',
-      );
+      logger.error({ err: failure.reason }, 'API resource shutdown failed');
     }
 
     clearTimeout(deadline);
-    process.exit(failures.length > 0 ? 1 : 0);
+    process.exit(failures.length > 0 ? 1 : exitCode);
   } catch (error: unknown) {
     logger.error({ err: error }, 'API shutdown failed');
 
