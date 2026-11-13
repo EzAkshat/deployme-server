@@ -35,9 +35,18 @@ function readStoredRoute(record: unknown) {
 
 export type RoutingResult = 'published' | 'unchanged' | 'superseded' | 'inactive';
 
+export interface DeploymentRoutingStorage {
+  readDeliveryRoute: typeof readDeliveryRoute;
+  writeDeliveryRoute: typeof writeDeliveryRoute;
+}
+
 export async function reconcileDeploymentRoute(
   deploymentId: string,
   projectId: string,
+  storage: DeploymentRoutingStorage = {
+    readDeliveryRoute,
+    writeDeliveryRoute,
+  },
 ): Promise<RoutingResult> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const deployment = await prisma.deployment.findUnique({
@@ -84,7 +93,7 @@ export async function reconcileDeploymentRoute(
 
     createArtifactObjectKey(prefix, 'index.html');
 
-    const existing = await readDeliveryRoute(subdomain);
+const existing = await storage.readDeliveryRoute(subdomain);
     // A disabled route is a persistent barrier against delayed publishers.
     // Restoring a project will require a separate, explicit workflow.
     if (existing !== null && isDisabledDeliveryRoute(existing.record)) {
@@ -133,7 +142,7 @@ export async function reconcileDeploymentRoute(
       }
     }
 
-    const written = await writeDeliveryRoute(
+    const written = await storage.writeDeliveryRoute(
       subdomain,
       {
         version: 1,

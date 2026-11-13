@@ -54,9 +54,16 @@ export async function processProjectArchiveOutbox(): Promise<number> {
 
   if (!event) return 0;
 
-  try {
-    const result = await disableArchivedProjectRoute(event.projectId);
+  return processClaimedProjectArchiveEvent(event, claimToken);
+}
 
+export async function processClaimedProjectArchiveEvent(
+  event: ArchiveEvent,
+  claimToken: string,
+  disableRoute: typeof disableArchivedProjectRoute = disableArchivedProjectRoute,
+): Promise<number> {
+  try {
+    const result = await disableRoute(event.projectId);
     const marked = await prisma.projectArchiveOutbox.updateMany({
       where: {
         id: event.id,
@@ -87,16 +94,14 @@ export async function processProjectArchiveOutbox(): Promise<number> {
 
     return 1;
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Unknown archive error';
+    const message = error instanceof Error ? error.message : 'Unknown archive error';
 
     const retryDelay = Math.min(
       MAX_RETRY_DELAY_MS,
-      INITIAL_RETRY_DELAY_MS *
-        2 ** Math.min(event.attempts - 1, 4),
+      INITIAL_RETRY_DELAY_MS * 2 ** Math.min(event.attempts - 1, 4),
     );
 
-    await prisma.projectArchiveOutbox.updateMany({
+    const scheduled = await prisma.projectArchiveOutbox.updateMany({
       where: {
         id: event.id,
         claimToken,
@@ -116,7 +121,20 @@ export async function processProjectArchiveOutbox(): Promise<number> {
       attempts: event.attempts,
       error: message,
     });
-
+    if (scheduled.count === 1) {
+      console.error('Project archive delivery update failed; retry scheduled.', {
+        outboxEventId: event.id,
+        projectId: event.projectId,
+        attempts: event.attempts,
+        error: message.slice(0, 2_000),
+      });
+    } else {
+      console.warn('Project archive failure ignored because the claim was lost.', {
+        outboxEventId: event.id,
+        projectId: event.projectId,
+        error: message.slice(0, 2_000),
+      });
+    }
     throw error;
   }
 }

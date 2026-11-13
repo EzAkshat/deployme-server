@@ -46,6 +46,10 @@ function requireRouteOwnership(
 
 export async function disableArchivedProjectRoute(
   projectId: string,
+  storage: ProjectRouteDisableStorage = {
+    readDeliveryRoute,
+    writeDeliveryRoute,
+  },
 ): Promise<DisableProjectRouteResult> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const project = await prisma.project.findUnique({
@@ -68,7 +72,7 @@ export async function disableArchivedProjectRoute(
       return 'no-subdomain';
     }
 
-    const existing = await readDeliveryRoute(project.subdomain);
+    const existing = await storage.readDeliveryRoute(project.subdomain);
 
     if (existing !== null) {
       if (isDisabledDeliveryRoute(existing.record)) {
@@ -82,7 +86,7 @@ export async function disableArchivedProjectRoute(
       requireRouteOwnership(existing.record, projectId);
     }
 
-    const written = await writeDeliveryRoute(
+    const written = await storage.writeDeliveryRoute(
       project.subdomain,
       {
         version: 1,
@@ -101,4 +105,8 @@ export async function disableArchivedProjectRoute(
   }
 
   throw new Error('Delivery route changed repeatedly; retry archival');
+}
+export interface ProjectRouteDisableStorage {
+  readDeliveryRoute: typeof readDeliveryRoute;
+  writeDeliveryRoute: typeof writeDeliveryRoute;
 }
