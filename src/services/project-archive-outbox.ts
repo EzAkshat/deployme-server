@@ -13,12 +13,13 @@ interface ArchiveEvent {
   attempts: number;
 }
 
-export async function processProjectArchiveOutbox(): Promise<number> {
-  const claimToken = randomUUID();
-  const now = new Date();
+export async function claimProjectArchiveEvent(
+  claimToken: string,
+  now: Date = new Date(),
+): Promise<ArchiveEvent | null> {
   const staleBefore = new Date(now.getTime() - CLAIM_LEASE_MS);
 
-  const event = await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const events = await tx.$queryRaw<ArchiveEvent[]>`
       SELECT "id", "projectId", "attempts"
       FROM "ProjectArchiveOutbox"
@@ -51,12 +52,16 @@ export async function processProjectArchiveOutbox(): Promise<number> {
       attempts: selected.attempts + 1,
     };
   });
+}
+
+export async function processProjectArchiveOutbox(): Promise<number> {
+  const claimToken = randomUUID();
+  const event = await claimProjectArchiveEvent(claimToken);
 
   if (!event) return 0;
 
   return processClaimedProjectArchiveEvent(event, claimToken);
 }
-
 export async function processClaimedProjectArchiveEvent(
   event: ArchiveEvent,
   claimToken: string,
