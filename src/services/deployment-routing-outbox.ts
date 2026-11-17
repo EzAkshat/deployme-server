@@ -93,7 +93,10 @@ export async function processDeploymentRoutingOutbox(): Promise<number> {
         processedAt: new Date(),
         claimToken: null,
         claimedAt: null,
-        lastError: null,
+        lastError:
+          result === 'suspended'
+            ? 'Routing skipped because the personal project owner is suspended. Request a new deployment after restoration.'
+            : null,
       },
     });
 

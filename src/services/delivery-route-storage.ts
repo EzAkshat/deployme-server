@@ -17,13 +17,9 @@ export interface DisabledDeliveryRouteRecord {
   disabled: true;
 }
 
-export type DeliveryRouteRecord =
-  | ActiveDeliveryRouteRecord
-  | DisabledDeliveryRouteRecord;
+export type DeliveryRouteRecord = ActiveDeliveryRouteRecord | DisabledDeliveryRouteRecord;
 
-export function isDisabledDeliveryRoute(
-  record: unknown,
-): record is DisabledDeliveryRouteRecord {
+export function isDisabledDeliveryRoute(record: unknown): record is DisabledDeliveryRouteRecord {
   return (
     typeof record === 'object' &&
     record !== null &&

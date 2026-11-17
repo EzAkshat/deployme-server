@@ -122,7 +122,7 @@ export async function createTeamInvitation(
   sendInvitationEmail: typeof sendTeamInvitationEmail = sendTeamInvitationEmail,
 ) {
   const email = normalizeEmail(emailInput);
-  const token = randomBytes(32).toString('hex');
+  const token = randomBytes(6).toString('base64url');
   const tokenHash = hashInvitationToken(token);
 
   const prepared = await prisma.$transaction(async (tx) => {
@@ -237,6 +237,7 @@ export async function listTeamInvitations(teamId: string, userId: number) {
       createdAt: true,
       expiresAt: true,
       acceptedAt: true,
+      declinedAt: true,
       revokedAt: true,
       invitedBy: {
         select: {
@@ -374,6 +375,106 @@ export async function acceptTeamInvitation(userId: number, emailInput: string, t
   });
 }
 
+export async function declineTeamInvitation(
+  userId: number,
+  emailInput: string,
+  token: string,
+) {
+  const tokenHash = hashInvitationToken(token);
+  const email = normalizeEmail(emailInput);
+
+  const initial = await prisma.teamInvitation.findUnique({
+    where: { tokenHash },
+    select: { teamId: true },
+  });
+
+  if (!initial) {
+    throw new TeamServiceError(
+      'INVITATION_NOT_FOUND',
+      'The invitation is invalid or no longer available.',
+    );
+  }
+
+  return prisma.$transaction(async (tx) => {
+    await lockTeamForMutation(tx, initial.teamId);
+
+    const invitation = await tx.teamInvitation.findUnique({
+      where: { tokenHash },
+    });
+
+    if (!invitation || invitation.teamId !== initial.teamId) {
+      throw new TeamServiceError(
+        'INVITATION_NOT_FOUND',
+        'The invitation is invalid or no longer available.',
+      );
+    }
+
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+
+    if (
+      !user ||
+      normalizeEmail(user.email) !== email ||
+      normalizeEmail(invitation.email) !== email
+    ) {
+      throw new TeamServiceError(
+        'INVITATION_EMAIL_MISMATCH',
+        'Sign in using the email address that received this invitation.',
+      );
+    }
+
+    // A retry after a lost response can safely confirm the earlier decline.
+    if (invitation.status === 'DECLINED') {
+      return {
+        id: invitation.id,
+        status: 'DECLINED' as const,
+      };
+    }
+
+    if (invitation.status !== 'PENDING') {
+      throw new TeamServiceError(
+        'INVITATION_NOT_PENDING',
+        'This invitation is no longer pending.',
+      );
+    }
+
+    const now = new Date();
+
+    if (invitation.expiresAt <= now) {
+      throw new TeamServiceError(
+        'INVITATION_EXPIRED',
+        'This invitation has expired.',
+      );
+    }
+
+    const updated = await tx.teamInvitation.updateMany({
+      where: {
+        id: invitation.id,
+        status: 'PENDING',
+        expiresAt: { gt: now },
+      },
+      data: {
+        status: 'DECLINED',
+        declinedAt: now,
+      },
+    });
+
+    if (updated.count !== 1) {
+      throw new TeamServiceError(
+        'INVITATION_NOT_PENDING',
+        'This invitation is no longer pending.',
+      );
+    }
+
+    return {
+      id: invitation.id,
+      status: 'DECLINED' as const,
+    };
+  });
+}
+
 export async function revokeTeamInvitation(teamId: string, invitationId: string, userId: number) {
   return prisma.$transaction(async (tx) => {
     await lockTeamForMutation(tx, teamId);
@@ -447,11 +548,7 @@ async function removeMembership(
       );
     }
 
-    if (
-      !leaving &&
-      actor.role !== 'OWNER' &&
-      actor.role !== 'MANAGER'
-    ) {
+    if (!leaving && actor.role !== 'OWNER' && actor.role !== 'MANAGER') {
       throw new TeamServiceError(
         'MEMBER_REMOVE_DENIED',
         'You do not have permission to remove team members.',
@@ -468,10 +565,7 @@ async function removeMembership(
     });
 
     if (!target) {
-      throw new TeamServiceError(
-        'TEAM_MEMBER_NOT_FOUND',
-        'The team member was not found.',
-      );
+      throw new TeamServiceError('TEAM_MEMBER_NOT_FOUND', 'The team member was not found.');
     }
 
     if (!leaving && actorUserId === targetUserId) {
@@ -481,11 +575,7 @@ async function removeMembership(
       );
     }
 
-    if (
-      !leaving &&
-      actor.role === 'MANAGER' &&
-      target.role !== 'MEMBER'
-    ) {
+    if (!leaving && actor.role === 'MANAGER' && target.role !== 'MEMBER') {
       throw new TeamServiceError(
         'MEMBER_REMOVE_DENIED',
         'Managers can only remove ordinary team members.',
@@ -498,10 +588,7 @@ async function removeMembership(
       });
 
       if (owners <= 1) {
-        throw new TeamServiceError(
-          'LAST_TEAM_OWNER',
-          'The last owner cannot leave or be removed.',
-        );
+        throw new TeamServiceError('LAST_TEAM_OWNER', 'The last owner cannot leave or be removed.');
       }
     }
 
@@ -545,11 +632,7 @@ async function removeMembership(
   });
 }
 
-export async function removeTeamMember(
-  teamId: string,
-  actorUserId: number,
-  targetUserId: number,
-) {
+export async function removeTeamMember(teamId: string, actorUserId: number, targetUserId: number) {
   return removeMembership(teamId, actorUserId, targetUserId, false);
 }
 
@@ -559,11 +642,7 @@ export async function leaveTeam(teamId: string, userId: number) {
 
 export type TeamMemberRole = 'OWNER' | 'MANAGER' | 'MEMBER';
 
-async function requireTeamOwner(
-  tx: Prisma.TransactionClient,
-  teamId: string,
-  userId: number,
-) {
+async function requireTeamOwner(tx: Prisma.TransactionClient, teamId: string, userId: number) {
   const membership = await tx.teamMembership.findUnique({
     where: {
       teamId_userId: { teamId, userId },
@@ -594,10 +673,7 @@ export async function changeTeamMemberRole(
   role: TeamMemberRole,
 ) {
   if (!['OWNER', 'MANAGER', 'MEMBER'].includes(role)) {
-    throw new TeamServiceError(
-      'INVALID_TEAM_ROLE',
-      'Provide a valid team role.',
-    );
+    throw new TeamServiceError('INVALID_TEAM_ROLE', 'Provide a valid team role.');
   }
 
   return prisma.$transaction(async (tx) => {
@@ -611,10 +687,7 @@ export async function changeTeamMemberRole(
     });
 
     if (!target) {
-      throw new TeamServiceError(
-        'TEAM_MEMBER_NOT_FOUND',
-        'The team member was not found.',
-      );
+      throw new TeamServiceError('TEAM_MEMBER_NOT_FOUND', 'The team member was not found.');
     }
 
     if (target.role === role) {

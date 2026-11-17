@@ -26,15 +26,9 @@ export function withDeploymentResourceSummary<
     resourceUsage: ResourceUsageRow[];
   },
 >(deployment: T) {
-  const {
-    processingAttempt,
-    resourceUsage,
-    ...publicDeployment
-  } = deployment;
+  const { processingAttempt, resourceUsage, ...publicDeployment } = deployment;
 
-  const executions = [...resourceUsage].sort(
-    (a, b) => a.executionNumber - b.executionNumber,
-  );
+  const executions = [...resourceUsage].sort((a, b) => a.executionNumber - b.executionNumber);
 
   const cpuMeasurements = executions
     .map((row) => row.cpuTimeMs)
@@ -50,9 +44,7 @@ export function withDeploymentResourceSummary<
   const coversExecutions =
     processingAttempt > 0 &&
     executions.length === processingAttempt &&
-    executions.every(
-      (row, index) => row.executionNumber === index + 1,
-    );
+    executions.every((row, index) => row.executionNumber === index + 1);
 
   const complete =
     hasSamples &&
@@ -66,30 +58,25 @@ export function withDeploymentResourceSummary<
         row.peakObservedMemoryBytes !== null,
     );
 
-  const status: 'unavailable' | 'partial' | 'complete' =
-    !hasSamples ? 'unavailable' : complete ? 'complete' : 'partial';
+  const status: 'unavailable' | 'partial' | 'complete' = !hasSamples
+    ? 'unavailable'
+    : complete
+      ? 'complete'
+      : 'partial';
 
   return {
     ...publicDeployment,
     resourceUsage: {
       status,
       cpuTimeMs:
-        cpuMeasurements.length > 0
-          ? cpuMeasurements.reduce((sum, value) => sum + value, 0)
-          : null,
+        cpuMeasurements.length > 0 ? cpuMeasurements.reduce((sum, value) => sum + value, 0) : null,
       peakObservedMemoryBytes:
         memoryMeasurements.length > 0
-          ? memoryMeasurements.reduce(
-              (maximum, value) => Math.max(maximum, value),
-              0,
-            )
+          ? memoryMeasurements.reduce((maximum, value) => Math.max(maximum, value), 0)
           : null,
       expectedExecutionCount: processingAttempt,
       recordedExecutionCount: executions.length,
-      sampleCount: executions.reduce(
-        (sum, row) => sum + row.sampleCount,
-        0,
-      ),
+      sampleCount: executions.reduce((sum, row) => sum + row.sampleCount, 0),
       executions,
     },
   };

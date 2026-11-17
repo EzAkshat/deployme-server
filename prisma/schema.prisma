@@ -8,27 +8,30 @@ datasource db {
 }
 
 model User {
-  id                        Int                    @id @default(autoincrement())
-  username                  String                 @unique
-  name                      String
-  email                     String                 @unique
-  platformRole              PlatformRole           @default(USER)
-  createdAt                 DateTime               @default(now()) @db.Timestamp(3)
-  onboardingCompletedAt     DateTime?              @db.Timestamp(3)
-  githubConnection          GitHubConnection?
-  invitationsSent           TeamInvitation[]       @relation("TeamInvitationInviter")
-  invitationsAccepted       TeamInvitation[]       @relation("TeamInvitationAccepter")
-  sessions                  Session[]
-  teamMemberships           TeamMembership[]
-  personalProjects          Project[]              @relation("PersonalProjectOwner")
-  projectShares             ProjectShare[]         @relation("ProjectShareUser")
-  projectImportRequests     ProjectImportRequest[]
-  projectPermissionsGranted ProjectShare[]         @relation("ProjectShareGrantedBy")
-
-  administratorAccessRequested AdministratorAccessGrant[] @relation("AdminAccessRequester")
-  administratorAccessApproved  AdministratorAccessGrant[] @relation("AdminAccessApprover")
-  administratorAccessUsed      AdministratorAccessGrant[] @relation("AdminAccessUser")
-  administratorAccessAudits    AdministratorAccessAudit[] @relation("AdminAccessAuditActor")
+  id                            Int                        @id @default(autoincrement())
+  username                      String                     @unique
+  name                          String
+  email                         String                     @unique
+  platformRole                  PlatformRole               @default(USER)
+  createdAt                     DateTime                   @default(now()) @db.Timestamp(3)
+  onboardingCompletedAt         DateTime?                  @db.Timestamp(3)
+  githubConnection              GitHubConnection?
+  invitationsSent               TeamInvitation[]           @relation("TeamInvitationInviter")
+  invitationsAccepted           TeamInvitation[]           @relation("TeamInvitationAccepter")
+  sessions                      Session[]
+  teamMemberships               TeamMembership[]
+  personalProjects              Project[]                  @relation("PersonalProjectOwner")
+  projectShares                 ProjectShare[]             @relation("ProjectShareUser")
+  projectImportRequests         ProjectImportRequest[]
+  projectPermissionsGranted     ProjectShare[]             @relation("ProjectShareGrantedBy")
+  platformAdminActionsPerformed PlatformAdminAudit[]       @relation("PlatformAdminAuditActor")
+  platformAdminActionsReceived  PlatformAdminAudit[]       @relation("PlatformAdminAuditTarget")
+  administratorAccessRequested  AdministratorAccessGrant[] @relation("AdminAccessRequester")
+  administratorAccessApproved   AdministratorAccessGrant[] @relation("AdminAccessApprover")
+  administratorAccessUsed       AdministratorAccessGrant[] @relation("AdminAccessUser")
+  administratorAccessAudits     AdministratorAccessAudit[] @relation("AdminAccessAuditActor")
+  suspendedAt                   DateTime?                  @db.Timestamp(3)
+  accountStateVersion           Int                        @default(0)
 }
 
 model GitHubConnection {
@@ -127,10 +130,10 @@ model TeamInvitation {
   expiresAt        DateTime             @db.Timestamp(3)
   acceptedAt       DateTime?            @db.Timestamp(3)
   revokedAt        DateTime?            @db.Timestamp(3)
-
-  team       Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  invitedBy  User  @relation("TeamInvitationInviter", fields: [invitedByUserId], references: [id], onDelete: Cascade)
-  acceptedBy User? @relation("TeamInvitationAccepter", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+  declinedAt       DateTime?            @db.Timestamp(3)
+  team             Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  invitedBy        User                 @relation("TeamInvitationInviter", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+  acceptedBy       User?                @relation("TeamInvitationAccepter", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
 
   @@index([teamId, email, status])
   @@index([email, status])
@@ -138,28 +141,29 @@ model TeamInvitation {
 }
 
 model Project {
-  id              String                @id @default(cuid())
-  teamId          String?
-  ownerUserId     Int?
-  name            String                @db.VarChar(100)
-  slug            String                @db.VarChar(100)
-  rootDirectory   String                @default(".") @db.VarChar(255)
-  installCommand  String                @default("npm install") @db.VarChar(500)
-  buildCommand    String                @default("npm run build") @db.VarChar(500)
-  outputDirectory String                @default("dist") @db.VarChar(255)
-  spaFallback     Boolean               @default(false)
-  createdAt       DateTime              @default(now()) @db.Timestamp(3)
-  updatedAt       DateTime              @updatedAt @db.Timestamp(3)
-  archivedAt      DateTime?             @db.Timestamp(3)
-  gitRepository   GitRepository?
-  importRequest   ProjectImportRequest?
-  team            Team?                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  ownerUser       User?                 @relation("PersonalProjectOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
-  shares          ProjectShare[]
-  deployments     Deployment[]
-  secrets         ProjectSecret[]
-  subdomain       String?               @unique @db.VarChar(63)
-  archiveOutbox   ProjectArchiveOutbox?
+  id                   String                @id @default(cuid())
+  teamId               String?
+  ownerUserId          Int?
+  name                 String                @db.VarChar(100)
+  slug                 String                @db.VarChar(100)
+  rootDirectory        String                @default(".") @db.VarChar(255)
+  installCommand       String                @default("npm install") @db.VarChar(500)
+  buildCommand         String                @default("npm run build") @db.VarChar(500)
+  outputDirectory      String                @default("dist") @db.VarChar(255)
+  spaFallback          Boolean               @default(false)
+  createdAt            DateTime              @default(now()) @db.Timestamp(3)
+  updatedAt            DateTime              @updatedAt @db.Timestamp(3)
+  archivedAt           DateTime?             @db.Timestamp(3)
+  gitRepository        GitRepository?
+  importRequest        ProjectImportRequest?
+  team                 Team?                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  ownerUser            User?                 @relation("PersonalProjectOwner", fields: [ownerUserId], references: [id], onDelete: Restrict)
+  shares               ProjectShare[]
+  deployments          Deployment[]
+  secrets              ProjectSecret[]
+  subdomain            String?               @unique @db.VarChar(63)
+  archiveOutbox        ProjectArchiveOutbox?
+  publicBuildVariables Json                  @default("{}")
 
   @@unique([teamId, slug])
   @@unique([ownerUserId, slug])
@@ -331,6 +335,7 @@ enum TeamInvitationStatus {
   PENDING
   ACCEPTED
   REVOKED
+  DECLINED
 }
 
 enum TeamRole {
@@ -439,4 +444,64 @@ model ProjectImportRequest {
 model DeploymentQuotaLock {
   scopeKey String @id @db.VarChar(160)
   revision BigInt @default(0)
+}
+
+enum ArtifactUploadAttemptStatus {
+  UPLOADING
+  ADOPTED
+  CLEANUP_PENDING
+  CLEANED
+}
+
+model ArtifactUploadAttempt {
+  id              String                      @id @default(cuid())
+  deploymentId    String
+  projectId       String
+  processingToken String
+  artifactBucket  String
+  artifactPrefix  String
+  status          ArtifactUploadAttemptStatus @default(UPLOADING)
+
+  createdAt    DateTime  @default(now()) @db.Timestamp(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamp(3)
+  adoptedAt    DateTime? @db.Timestamp(3)
+  cleanupAfter DateTime? @db.Timestamp(3)
+  cleanedAt    DateTime? @db.Timestamp(3)
+
+  claimToken      String?
+  claimedAt       DateTime? @db.Timestamp(3)
+  cleanupAttempts Int       @default(0)
+  lastError       String?   @db.Text
+
+  @@unique([deploymentId, processingToken])
+  @@unique([artifactBucket, artifactPrefix])
+  @@index([status, cleanupAfter])
+  @@index([status, claimedAt])
+  @@index([projectId])
+}
+
+enum PlatformAdminAuditAction {
+  USER_PLATFORM_ROLE_CHANGED
+  USER_SUSPENDED
+  USER_RESTORED
+}
+
+model PlatformAdminAudit {
+  id                  String                   @id @default(cuid())
+  actorUserId         Int
+  targetUserId        Int
+  actorPlatformRole   PlatformRole
+  action              PlatformAdminAuditAction
+  reason              String                   @db.VarChar(1000)
+  previousRole        PlatformRole
+  nextRole            PlatformRole
+  createdAt           DateTime                 @default(now()) @db.Timestamp(3)
+  previousSuspendedAt DateTime?                @db.Timestamp(3)
+  nextSuspendedAt     DateTime?                @db.Timestamp(3)
+  actor               User                     @relation("PlatformAdminAuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  target              User                     @relation("PlatformAdminAuditTarget", fields: [targetUserId], references: [id], onDelete: Restrict)
+
+  @@index([createdAt, id])
+  @@index([actorUserId, createdAt, id])
+  @@index([targetUserId, createdAt, id])
 }

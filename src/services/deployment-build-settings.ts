@@ -1,15 +1,31 @@
 import { z } from 'zod';
 import type { Prisma } from '../generated/prisma/client.js';
 
-const buildSettingsSchema = z
+import { publicBuildVariablesSchema } from './public-build-variables.js';
+
+const commonBuildSettings = {
+  rootDirectory: z.string().min(1).max(255),
+  installCommand: z.string().max(500),
+  buildCommand: z.string().max(500),
+  outputDirectory: z.string().min(1).max(255),
+};
+
+const versionOneSchema = z
   .object({
     version: z.literal(1),
-    rootDirectory: z.string().min(1).max(255),
-    installCommand: z.string().max(500),
-    buildCommand: z.string().max(500),
-    outputDirectory: z.string().min(1).max(255),
+    ...commonBuildSettings,
   })
   .strict();
+
+const versionTwoSchema = z
+  .object({
+    version: z.literal(2),
+    ...commonBuildSettings,
+    publicBuildVariables: publicBuildVariablesSchema,
+  })
+  .strict();
+
+const buildSettingsSchema = z.discriminatedUnion('version', [versionOneSchema, versionTwoSchema]);
 
 export class DeploymentBuildSettingsError extends Error {
   constructor(message: string) {
@@ -33,6 +49,15 @@ export function readDeploymentBuildSettings(value: unknown) {
     );
   }
 
+  if (result.data.version === 1) {
+    // Older queued deployments use an empty variable snapshot.
+    // Never substitute the project's current variables here.
+    return {
+      ...result.data,
+      publicBuildVariables: publicBuildVariablesSchema.parse({}),
+    };
+  }
+
   return result.data;
 }
 
@@ -50,6 +75,7 @@ export async function captureDeploymentBuildSettings(
       installCommand: true,
       buildCommand: true,
       outputDirectory: true,
+      publicBuildVariables: true,
     },
   });
 
@@ -59,8 +85,17 @@ export async function captureDeploymentBuildSettings(
     );
   }
 
-  return readDeploymentBuildSettings({
-    version: 1,
+  // New deployments always persist version 2.
+  const result = versionTwoSchema.safeParse({
+    version: 2,
     ...project,
   });
+
+  if (!result.success) {
+    throw new DeploymentBuildSettingsError(
+      'Cannot capture build settings: project settings are invalid.',
+    );
+  }
+
+  return result.data;
 }

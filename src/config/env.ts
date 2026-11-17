@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import 'dotenv/config';
+import { isIP } from 'node:net';
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -40,10 +41,14 @@ const envSchema = z.object({
 
   GITHUB_APP_CALLBACK_URL: z.string().url().optional(),
 
-  GITHUB_TOKEN_ENCRYPTION_KEY: z
-    .string()
-    .regex(/^[a-fA-F0-9]{64}$/, 'Must contain exactly 64 hexadecimal characters')
-    .optional(),
+  GITHUB_TOKEN_ENCRYPTION_KEY: z.string().regex(/^[a-fA-F0-9]{64}$/, 'Must contain exactly 64 hexadecimal characters').optional(),
+
+  API_HOST: z.string().trim().refine((value) => isIP(value) !== 0, 'API_HOST must be an IPv4 or IPv6 address.').default('127.0.0.1'),
+
+  TRUST_LOCAL_PROXY: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+
+  PNPM_BUILD_IMAGE: z.string().regex(/^sha256:[a-f0-9]{64}$/,'PNPM_BUILD_IMAGE must be a full Docker image ID',).optional(),
+  
 });
 
 const result = envSchema.safeParse(process.env);

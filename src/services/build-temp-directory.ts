@@ -11,16 +11,13 @@ const SAFE_PART = /^[A-Za-z0-9_-]{1,64}$/;
 
 // Fields are separated by dots, which SAFE_PART does not permit.
 export const MANAGED_BUILD_TEMP_PATTERN =
-  /^deployme-(build|npm)-v1\.([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{1,64})\.([1-9]\d*)\.([A-Za-z0-9]{6})$/;
+  /^deployme-(build|npm|source)-v1\.([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{1,64})\.([1-9]\d*)\.([A-Za-z0-9]{6})$/;
 
 export async function createBuildTempDirectory(
-  kind: 'build' | 'npm',
+  kind: 'build' | 'npm' | 'source',
   owner: BuildTempOwner,
 ): Promise<string> {
-  if (
-    !SAFE_PART.test(owner.deploymentId) ||
-    !SAFE_PART.test(owner.processingToken)
-  ) {
+  if (!SAFE_PART.test(owner.deploymentId) || !SAFE_PART.test(owner.processingToken)) {
     throw new Error('Invalid build temporary-directory ownership');
   }
 

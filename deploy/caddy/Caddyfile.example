@@ -1,0 +1,13 @@
+# Replace these example domains before installation.
+
+app.example.com {
+	reverse_proxy 127.0.0.1:3001
+}
+
+admin.example.com {
+	reverse_proxy 127.0.0.1:3001
+}
+
+api.example.com {
+	reverse_proxy 127.0.0.1:3000
+}

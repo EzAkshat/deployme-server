@@ -12,7 +12,12 @@ import {
   verifyOtpAndGetExistingUser,
 } from '../services/otp-challenge.js';
 import { sendOtpEmail } from '../services/email.js';
-import { createSession, revokeSession, SESSION_COOKIE_NAME } from '../services/session.js';
+import {
+  createSession,
+  revokeSession,
+  SESSION_COOKIE_NAME,
+  AccountUnavailableError,
+} from '../services/session.js';
 import { prisma } from '../config/database.js';
 
 type OtpEmailSender = (email: string, code: string) => Promise<void>;
@@ -130,9 +135,18 @@ export function createAuthRouter(sendEmail: OtpEmailSender = sendOtpEmail) {
           name: user.name,
           email: user.email,
           onboardingCompletedAt: user.onboardingCompletedAt,
+          platformRole: user.platformRole,
         },
       });
     } catch (error: unknown) {
+      if (error instanceof AccountUnavailableError) {
+        res.status(403).json({
+          error: {
+            message: 'This account cannot sign in. Contact platform support.',
+          },
+        });
+        return;
+      }
       logger.error('OTP verification failed');
 
       res.status(500).json({
@@ -201,9 +215,18 @@ export function createAuthRouter(sendEmail: OtpEmailSender = sendOtpEmail) {
             name: user.name,
             email: user.email,
             platformRole: user.platformRole,
+            onboardingCompletedAt: user.onboardingCompletedAt,
           },
         });
       } catch (error: unknown) {
+        if (error instanceof AccountUnavailableError) {
+          res.status(403).json({
+            error: {
+              message: 'This account cannot sign in. Contact platform support.',
+            },
+          });
+          return;
+        }
         logger.error({ err: error }, 'Administrator OTP verification failed');
 
         res.status(500).json({
@@ -224,6 +247,7 @@ export function createAuthRouter(sendEmail: OtpEmailSender = sendOtpEmail) {
         username: user.username,
         name: user.name,
         email: user.email,
+        platformRole: user.platformRole,
         onboardingCompletedAt: user.onboardingCompletedAt,
       },
     });
@@ -276,6 +300,7 @@ export function createAuthRouter(sendEmail: OtpEmailSender = sendOtpEmail) {
           name: true,
           email: true,
           onboardingCompletedAt: true,
+          platformRole: true,
         },
       });
 

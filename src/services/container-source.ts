@@ -6,6 +6,7 @@ import { finished, pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Container } from 'dockerode';
 import tar from 'tar-stream';
+import { createBuildTempDirectory, type BuildTempOwner } from './build-temp-directory.js';
 
 const MAX_ENTRIES = 10_000;
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -142,8 +143,11 @@ async function createSourceArchive(sourceRoot: string, archivePath: string): Pro
 export async function copyRepositoryToContainer(
   container: Container,
   repositoryRoot: string,
+  owner?: BuildTempOwner,
 ): Promise<void> {
-  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'deployme-source-'));
+  const temporaryDirectory = owner
+    ? await createBuildTempDirectory('source', owner)
+    : await mkdtemp(path.join(os.tmpdir(), 'deployme-source-'));
 
   try {
     const archivePath = path.join(temporaryDirectory, 'source.tar');

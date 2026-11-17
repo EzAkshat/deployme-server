@@ -16,8 +16,12 @@ import {
   updateProjectSettings,
   updateProjectSettingsSchema,
   getProjectOverview,
+  getProjectAccess,
 } from '../services/projects.js';
-import { ProjectAuthorizationError } from '../services/project-authorization.js';
+import {
+  ProjectAuthorizationError,
+  requireProjectPermission,
+} from '../services/project-authorization.js';
 import {
   requestDeployment,
   DeploymentServiceError,
@@ -25,7 +29,7 @@ import {
   getProjectDeployment,
 } from '../services/deployments.js';
 import {
-  importPersonalProject,
+  importProject,
   projectImportSchema,
   projectImportKeySchema,
   ProjectImportError,
@@ -172,7 +176,7 @@ export function createProjectsRouter() {
     }
 
     try {
-      const result = await importPersonalProject(
+      const result = await importProject(
         res.locals.authenticatedUser.id,
         keyResult.data,
         inputResult.data,
@@ -298,6 +302,30 @@ export function createProjectsRouter() {
       });
     } catch (error: unknown) {
       handleProjectError(res, error, 'Project creation failed');
+    }
+  });
+  projectsRouter.get('/:projectId/settings', requireAuth, async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+
+    const projectId = getRouteParam(req.params.projectId);
+
+    if (!projectId) {
+      res.status(400).json({
+        error: { message: 'A valid project ID is required.' },
+      });
+      return;
+    }
+
+    try {
+      const userId = res.locals.authenticatedUser.id;
+
+      await requireProjectPermission(userId, projectId, 'MANAGE');
+
+      const project = await getProject(userId, projectId);
+
+      res.status(200).json({ project });
+    } catch (error: unknown) {
+      handleProjectError(res, error, 'Project settings retrieval failed');
     }
   });
   projectsRouter.patch(
@@ -653,6 +681,26 @@ export function createProjectsRouter() {
     }
   });
 
+  projectsRouter.get('/:projectId/access', requireAuth, async (req, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+
+    const projectId = getRouteParam(req.params.projectId);
+
+    if (!projectId || !/^[A-Za-z0-9_-]{1,128}$/.test(projectId)) {
+      res.status(400).json({
+        error: { message: 'A valid project ID is required.' },
+      });
+      return;
+    }
+
+    try {
+      const access = await getProjectAccess(res.locals.authenticatedUser.id, projectId);
+
+      res.status(200).json(access);
+    } catch (error: unknown) {
+      handleProjectError(res, error, 'Project access lookup failed');
+    }
+  });
   return projectsRouter;
 }
 

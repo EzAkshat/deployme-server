@@ -254,7 +254,7 @@ export async function verifyOtpAndGetOrCreateUser(
           });
 
           if (existingUser) {
-            return existingUser;
+            return existingUser.suspendedAt === null ? existingUser : null;
           }
 
           // A failed account creation rolls back OTP consumption too.
@@ -313,7 +313,11 @@ export async function verifyOtpAndGetExistingUser(
     where: { email: normalizeEmail(email) },
   });
 
-  if (!user || (user.platformRole !== 'SUPER_ADMIN' && user.platformRole !== 'SITE_ADMIN')) {
+  if (
+    !user ||
+    user.suspendedAt !== null ||
+    (user.platformRole !== 'SUPER_ADMIN' && user.platformRole !== 'SITE_ADMIN')
+  ) {
     return { status: 'UNAUTHORIZED' as const, user: null };
   }
 

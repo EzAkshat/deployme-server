@@ -33,6 +33,7 @@ export async function downloadBuildArtifacts(
   let connection: Duplex | undefined;
   let archiveBytes = 0;
   let stderrBytes = 0;
+  let exportCompleted = false;
   const stderrChunks: Buffer[] = [];
 
   async function* extractStdout(source: AsyncIterable<Buffer>): AsyncGenerator<Buffer> {
@@ -151,6 +152,7 @@ export async function downloadBuildArtifacts(
           throw new Error('Artifact export returned an empty stream');
         }
 
+        exportCompleted = true;
         return archiveBytes;
       }
 
@@ -158,13 +160,15 @@ export async function downloadBuildArtifacts(
     }
 
     throw new Error('Artifact export did not report completion');
-  } catch (error) {
-    connection?.destroy();
-    await file.close();
-    await rm(destination, { force: true });
-    throw error;
   } finally {
     connection?.destroy();
-    await file.close();
+
+    try {
+      await file.close();
+    } finally {
+      if (!exportCompleted) {
+        await rm(destination, { force: true });
+      }
+    }
   }
 }

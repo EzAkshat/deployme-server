@@ -11,6 +11,8 @@ import {
   withDeploymentResourceSummary,
 } from './deployment-resource-summary.js';
 import { enforceProjectDeploymentQuota } from './deployment-quota.js';
+import { lockTeamForMutation } from './team-lock.js';
+import { lockActiveAccount } from './account-availability.js';
 
 export class DeploymentServiceError extends Error {
   constructor(
@@ -49,24 +51,65 @@ export async function requestDeployment(userId: number, projectId: string) {
   }
 
   return prisma.$transaction(async (tx) => {
-    // Recheck that the project is active inside the transaction.
-    const project = await tx.project.findFirst({
-      where: {
-        id: projectId,
-        archivedAt: null,
-      },
-      select: {
-        id: true,
-      },
+    const initial = await tx.project.findUnique({
+      where: { id: projectId },
+      select: { teamId: true },
     });
 
-    if (!project) {
+    if (!initial) {
       throw new DeploymentServiceError(
         'PROJECT_NOT_FOUND',
         'The project was not found or is archived.',
       );
     }
+
+    if (initial.teamId !== null) {
+      await lockTeamForMutation(tx, initial.teamId);
+    }
+
+    // Recheck current membership and deployment permission after locking.
+    const project = await tx.project.findFirst({
+      where: {
+        id: projectId,
+        archivedAt: null,
+        OR: [
+          {
+            ownerUserId: userId,
+            teamId: null,
+          },
+          {
+            ownerUserId: null,
+            teamId: initial.teamId,
+            team: {
+              memberships: {
+                some: { userId },
+              },
+            },
+            shares: {
+              some: {
+                userId,
+                canDeploy: true,
+              },
+            },
+          },
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (!project) {
+      throw new ProjectAuthorizationError(
+        'PROJECT_DEPLOY_DENIED',
+        'The project was not found or you do not have permission to deploy it.',
+      );
+    }
+
     await enforceProjectDeploymentQuota(tx, project.id);
+    // Personal owners were checked by quota enforcement.
+    // Team deployments also need the requesting member checked.
+    if (initial.teamId !== null) {
+      await lockActiveAccount(tx, userId);
+    }
     const deployment = await tx.deployment.create({
       data: {
         projectId: project.id,
@@ -231,7 +274,5 @@ export async function getProjectDeployment(
       },
     },
   });
-  return deployment
-  ? withDeploymentMetrics(withDeploymentResourceSummary(deployment))
-  : null;
+  return deployment ? withDeploymentMetrics(withDeploymentResourceSummary(deployment)) : null;
 }

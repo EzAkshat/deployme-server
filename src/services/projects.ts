@@ -20,6 +20,7 @@ import {
   withDeploymentResourceSummary,
 } from './deployment-resource-summary.js';
 import { lockTeamForMutation } from './team-lock.js';
+import { publicBuildVariablesSchema } from './public-build-variables.js';
 
 export class ProjectServiceError extends Error {
   constructor(
@@ -319,6 +320,14 @@ export async function getProject(userId: number, projectId: string) {
       name: true,
       slug: true,
       subdomain: true,
+      gitRepository: {
+        select: {
+          owner: true,
+          name: true,
+          defaultBranch: true,
+          productionBranch: true,
+        },
+      },
       rootDirectory: true,
       installCommand: true,
       buildCommand: true,
@@ -365,6 +374,7 @@ export async function getProjectOverview(userId: number, projectId: string) {
       artifactFileCount: true,
       artifactSizeBytes: true,
       processingAttempt: true,
+      publicBuildVariables: true,
       resourceUsage: {
         select: resourceUsageSelect,
       },
@@ -645,6 +655,7 @@ export const updateProjectSettingsSchema = z
     buildCommand: z.string().trim().max(500).optional(),
     outputDirectory: projectDirectorySchema.optional(),
     spaFallback: z.boolean().optional(),
+    publicBuildVariables: publicBuildVariablesSchema.optional(),
   })
   .strict()
   .refine(
@@ -974,9 +985,66 @@ export async function updateProjectSettings(
   const settings = parsed.data;
 
   return prisma.$transaction(async (tx) => {
+    const initial = await tx.project.findUnique({
+      where: { id: projectId },
+      select: { teamId: true },
+    });
+
+    if (!initial) {
+      throw new ProjectAuthorizationError(
+        'PROJECT_ACCESS_DENIED',
+        'The project was not found or you cannot manage it.',
+      );
+    }
+
+    if (initial.teamId !== null) {
+      await lockTeamForMutation(tx, initial.teamId);
+    }
+
+    // Recheck authorization inside the transaction after taking the
+    // same team lock used by permission and membership mutations.
     const previous = await tx.project.findFirst({
-      where: { id: projectId, archivedAt: null },
-      select: { id: true, spaFallback: true },
+      where: {
+        id: projectId,
+        archivedAt: null,
+        OR: [
+          {
+            ownerUserId: userId,
+            teamId: null,
+          },
+          {
+            ownerUserId: null,
+            teamId: initial.teamId,
+            team: {
+              memberships: {
+                some: {
+                  userId,
+                  role: { in: ['OWNER', 'MANAGER'] },
+                },
+              },
+            },
+          },
+          {
+            ownerUserId: null,
+            teamId: initial.teamId,
+            team: {
+              memberships: {
+                some: { userId },
+              },
+            },
+            shares: {
+              some: {
+                userId,
+                canManage: true,
+              },
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        spaFallback: true,
+      },
     });
 
     if (!previous) {
@@ -1004,6 +1072,9 @@ export async function updateProjectSettings(
         ...(settings.spaFallback !== undefined && {
           spaFallback: settings.spaFallback,
         }),
+        ...(settings.publicBuildVariables !== undefined && {
+          publicBuildVariables: settings.publicBuildVariables,
+        }),
       },
     });
 
@@ -1023,6 +1094,7 @@ export async function updateProjectSettings(
         buildCommand: true,
         outputDirectory: true,
         spaFallback: true,
+        publicBuildVariables: true,
       },
     });
 
@@ -1052,5 +1124,89 @@ export async function updateProjectSettings(
     });
 
     return { project, routingRefreshQueued: true };
+  });
+}
+
+export async function getProjectAccess(actorUserId: number, projectId: string) {
+  return prisma.$transaction(async (tx) => {
+    const initial = await tx.project.findUnique({
+      where: { id: projectId },
+      select: { teamId: true },
+    });
+
+    if (!initial?.teamId) {
+      throw new ProjectServiceError(
+        'PROJECT_MANAGE_DENIED',
+        'The project was not found or you cannot manage its sharing permissions.',
+      );
+    }
+
+    await lockTeamForMutation(tx, initial.teamId);
+
+    const project = await tx.project.findFirst({
+      where: {
+        id: projectId,
+        teamId: initial.teamId,
+        ownerUserId: null,
+        archivedAt: null,
+        team: {
+          memberships: {
+            some: {
+              userId: actorUserId,
+              role: { in: ['OWNER', 'MANAGER'] },
+            },
+          },
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        teamId: true,
+        shares: {
+          select: {
+            userId: true,
+            canView: true,
+            canDeploy: true,
+            canManage: true,
+          },
+        },
+      },
+    });
+
+    if (!project) {
+      throw new ProjectServiceError(
+        'PROJECT_MANAGE_DENIED',
+        'The project was not found or you cannot manage its sharing permissions.',
+      );
+    }
+
+    const members = await tx.teamMembership.findMany({
+      where: { teamId: initial.teamId },
+      orderBy: { userId: 'asc' },
+      select: {
+        role: true,
+        user: {
+          select: {
+            id: true,
+            name: true,
+            username: true,
+          },
+        },
+      },
+    });
+
+    const shares = new Map(project.shares.map((share) => [share.userId, share]));
+
+    return {
+      project: {
+        id: project.id,
+        name: project.name,
+        teamId: initial.teamId,
+      },
+      members: members.map((member) => ({
+        ...member,
+        share: shares.get(member.user.id) ?? null,
+      })),
+    };
   });
 }

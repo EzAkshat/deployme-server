@@ -1,0 +1,23 @@
+[Unit]
+Description=DeployMe API
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=deployme
+Group=deployme
+WorkingDirectory=/opt/deployme/server
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node --env-file=/etc/deployme/backend.env dist/server.js
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

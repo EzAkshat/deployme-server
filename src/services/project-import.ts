@@ -6,7 +6,15 @@ import { Prisma } from '../generated/prisma/client.js';
 import { createProject } from './projects.js';
 import { syncGitHubInstallation } from './github-app.js';
 import { inspectGitHubProject } from './github-project-inspection.js';
-import { assertDeploymentQuotaAvailable, lockDeploymentQuota } from './deployment-quota.js';
+import {
+  assertDeploymentQuotaAvailable,
+  lockDeploymentQuota,
+  type DeploymentQuotaScope,
+} from './deployment-quota.js';
+import { lockTeamForMutation } from './team-lock.js';
+import { publicBuildVariablesSchema } from './public-build-variables.js';
+import { PNPM_INSTALL_COMMAND } from './build-runner.js';
+import { lockActiveAccount } from './account-availability.js';
 
 export class ProjectImportError extends Error {
   constructor(
@@ -49,7 +57,11 @@ export const projectImportSchema = z
       .min(1)
       .max(63)
       .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-
+    teamId: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,128}$/)
+      .optional(),
+    grantCreatorDeploy: z.boolean().optional(),
     installationId: z.number().int().positive().safe(),
     repositoryId: z.number().int().positive().safe(),
     owner: z
@@ -65,18 +77,35 @@ export const projectImportSchema = z
       .max(100)
       .regex(/^[A-Za-z0-9_.-]+$/)
       .refine((value) => value !== '.' && value !== '..'),
-
+    publicBuildVariables: publicBuildVariablesSchema.optional(),
     // The commit returned by the inspection the user reviewed.
     commitSha: z.string().regex(/^[a-f0-9]{40}$/),
 
     rootDirectory: relativePathSchema,
-    installCommand: z.enum(['', 'npm ci']),
+    installCommand: z.enum(['', 'npm ci', PNPM_INSTALL_COMMAND]),
     buildCommand: z.string().trim().max(500),
     outputDirectory: relativePathSchema,
     spaFallback: z.boolean(),
     settingsReviewed: z.boolean().default(false),
   })
-  .strict();
+  .strict()
+  .superRefine((input, context) => {
+    if (input.teamId !== undefined && input.grantCreatorDeploy !== true) {
+      context.addIssue({
+        code: 'custom',
+        path: ['grantCreatorDeploy'],
+        message: 'Confirm your deployment permission for this team project.',
+      });
+    }
+
+    if (input.teamId === undefined && input.grantCreatorDeploy !== undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['grantCreatorDeploy'],
+        message: 'Deployment permission confirmation is only for team imports.',
+      });
+    }
+  });
 
 export const projectImportKeySchema = z
   .string()
@@ -102,6 +131,7 @@ const importResultSelect = {
       archivedAt: true,
       createdAt: true,
       updatedAt: true,
+      publicBuildVariables: true,
     },
   },
   deployment: {
@@ -121,11 +151,27 @@ type ImportRecord = Prisma.ProjectImportRequestGetPayload<{
   select: typeof importResultSelect;
 }>;
 
-function formatResult(
+async function requireTeamImporter(db: Prisma.TransactionClient, teamId: string, userId: number) {
+  const membership = await db.teamMembership.findUnique({
+    where: { teamId_userId: { teamId, userId } },
+    select: { role: true },
+  });
+
+  if (!membership || !['OWNER', 'MANAGER'].includes(membership.role)) {
+    throw new ProjectImportError(
+      404,
+      'The team was not found or you cannot import projects into it.',
+    );
+  }
+}
+
+async function formatResult(
   record: ImportRecord,
   userId: number,
   requestHash: string,
   replayed: boolean,
+  teamId: string | undefined,
+  db: Prisma.TransactionClient,
 ) {
   if (record.requestHash !== requestHash) {
     throw new ProjectImportError(
@@ -134,23 +180,54 @@ function formatResult(
     );
   }
 
-  if (
-    record.project.ownerUserId !== userId ||
-    record.project.teamId !== null ||
-    record.project.archivedAt !== null
-  ) {
+  const project = record.project;
+
+  const correctDestination =
+    teamId === undefined
+      ? project.ownerUserId === userId && project.teamId === null
+      : project.ownerUserId === null && project.teamId === teamId;
+
+  if (!correctDestination || project.archivedAt !== null) {
     throw new ProjectImportError(
       409,
       'The original imported project is no longer available for this request.',
     );
   }
 
+  if (teamId !== undefined) {
+    const membership = await db.teamMembership.findUnique({
+      where: { teamId_userId: { teamId, userId } },
+      select: { role: true },
+    });
+
+    if (!membership) {
+      throw new ProjectImportError(404, 'The team project is no longer accessible.');
+    }
+
+    if (membership.role === 'MEMBER') {
+      const share = await db.projectShare.findUnique({
+        where: {
+          projectId_userId: {
+            projectId: project.id,
+            userId,
+          },
+        },
+        select: { canView: true },
+      });
+
+      if (!share?.canView) {
+        throw new ProjectImportError(404, 'The team project is no longer accessible.');
+      }
+    }
+  }
+
   return {
-    project: record.project,
+    project,
     deployment: record.deployment,
     replayed,
   };
 }
+
 interface ProjectImportDependencies {
   inspect: (
     ...args: Parameters<typeof inspectGitHubProject>
@@ -167,7 +244,7 @@ const defaultImportDependencies: ProjectImportDependencies = {
   inspect: inspectGitHubProject,
   syncInstallation: syncGitHubInstallation,
 };
-export async function importPersonalProject(
+export async function importProject(
   userId: number,
   rawKey: string,
   rawInput: unknown,
@@ -184,7 +261,20 @@ export async function importPersonalProject(
   const input = inputResult.data;
 
   // Sorting makes hashing independent of JSON property order.
-  const normalizedEntries = Object.entries(input).sort(([left], [right]) =>
+  // Preserve existing hashes for requests without public build variables.
+  // Variable insertion order must not change an otherwise identical request.
+  const normalizedInput = {
+    ...input,
+    ...(input.publicBuildVariables !== undefined && {
+      publicBuildVariables: Object.fromEntries(
+        Object.entries(input.publicBuildVariables).sort(([left], [right]) =>
+          left.localeCompare(right),
+        ),
+      ),
+    }),
+  };
+
+  const normalizedEntries = Object.entries(normalizedInput).sort(([left], [right]) =>
     left.localeCompare(right),
   );
 
@@ -195,18 +285,26 @@ export async function importPersonalProject(
   };
 
   async function findReplay() {
-    const existing = await prisma.projectImportRequest.findUnique({
-      where,
-      select: importResultSelect,
-    });
+    return prisma.$transaction(async (tx) => {
+      if (input.teamId !== undefined) {
+        await lockTeamForMutation(tx, input.teamId);
+      }
 
-    return existing ? formatResult(existing, userId, requestHash, true) : null;
+      const existing = await tx.projectImportRequest.findUnique({
+        where,
+        select: importResultSelect,
+      });
+
+      return existing ? formatResult(existing, userId, requestHash, true, input.teamId, tx) : null;
+    });
   }
 
   const existing = await findReplay();
 
   if (existing) return existing;
-
+  if (input.teamId !== undefined) {
+    await requireTeamImporter(prisma, input.teamId, userId);
+  }
   // This helper verifies the signed-in user's GitHub repository access.
   const inspection = await dependencies.inspect(userId, {
     installationId: input.installationId,
@@ -249,16 +347,19 @@ export async function importPersonalProject(
     );
   }
   // Synchronize shared installation metadata outside the project transaction.
-const installation = await dependencies.syncInstallation(input.installationId);
+  const installation = await dependencies.syncInstallation(input.installationId);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       return await prisma.$transaction(
         async (tx) => {
-          const quotaScope = {
-            kind: 'personal' as const,
-            userId,
-          };
+          if (input.teamId !== undefined) {
+            await lockTeamForMutation(tx, input.teamId);
+          }
 
+          const quotaScope: DeploymentQuotaScope =
+            input.teamId === undefined
+              ? { kind: 'personal', userId }
+              : { kind: 'team', teamId: input.teamId };
           // Lock before replay lookup and before creating any project.
           await lockDeploymentQuota(tx, quotaScope);
 
@@ -269,14 +370,21 @@ const installation = await dependencies.syncInstallation(input.installationId);
 
           // A replay creates no deployment, so it requires no free slot.
           if (previous) {
-            return formatResult(previous, userId, requestHash, true);
+            return formatResult(previous, userId, requestHash, true, input.teamId, tx);
+          }
+          if (input.teamId !== undefined) {
+            await requireTeamImporter(tx, input.teamId, userId);
           }
 
           await assertDeploymentQuotaAvailable(tx, quotaScope);
+          if (quotaScope.kind === 'team') {
+            await lockActiveAccount(tx, userId);
+          }
 
           const project = await createProject(
             userId,
             {
+              ...(input.teamId !== undefined && { teamId: input.teamId }),
               name: input.name,
               slug: input.slug,
               subdomain: input.subdomain,
@@ -288,7 +396,14 @@ const installation = await dependencies.syncInstallation(input.installationId);
             },
             tx,
           );
-
+          if (input.publicBuildVariables !== undefined) {
+            await tx.project.update({
+              where: { id: project.id },
+              data: {
+                publicBuildVariables: input.publicBuildVariables,
+              },
+            });
+          }
           await tx.gitRepository.create({
             data: {
               projectId: project.id,
@@ -300,7 +415,18 @@ const installation = await dependencies.syncInstallation(input.installationId);
               productionBranch: inspection.defaultBranch,
             },
           });
-
+          if (input.teamId !== undefined) {
+            await tx.projectShare.create({
+              data: {
+                projectId: project.id,
+                userId,
+                grantedByUserId: userId,
+                canView: true,
+                canDeploy: true,
+                canManage: false,
+              },
+            });
+          }
           // This request creates a new personal project owned by this user.
           // Existing-project deployment permissions remain in requestDeployment.
           const deployment = await tx.deployment.create({
@@ -339,7 +465,7 @@ const installation = await dependencies.syncInstallation(input.installationId);
             select: importResultSelect,
           });
 
-          return formatResult(record, userId, requestHash, false);
+          return formatResult(record, userId, requestHash, false, input.teamId, tx);
         },
         {
           isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -378,4 +504,21 @@ const installation = await dependencies.syncInstallation(input.installationId);
     409,
     'The import could not complete. Retry with the same idempotency key.',
   );
+}
+export async function importPersonalProject(
+  userId: number,
+  rawKey: string,
+  rawInput: unknown,
+  dependencies: ProjectImportDependencies = defaultImportDependencies,
+) {
+  if (
+    rawInput &&
+    typeof rawInput === 'object' &&
+    'teamId' in rawInput &&
+    rawInput.teamId !== undefined
+  ) {
+    throw new ProjectImportError(400, 'This entry point only imports personal projects.');
+  }
+
+  return importProject(userId, rawKey, rawInput, dependencies);
 }

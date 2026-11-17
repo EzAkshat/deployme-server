@@ -64,10 +64,7 @@ function createPresenceClient(reconnect: boolean): Redis {
   return client;
 }
 
-export function startWorkerHeartbeat(
-  role: WorkerRole,
-  shouldAdvertise: () => boolean,
-) {
+export function startWorkerHeartbeat(role: WorkerRole, shouldAdvertise: () => boolean) {
   const instanceId = randomUUID();
   const client = createPresenceClient(true);
   const key = KEYS[role];
@@ -82,13 +79,7 @@ export function startWorkerHeartbeat(
     inFlight = (async () => {
       try {
         if (shouldAdvertise()) {
-          await client.eval(
-            RENEW_SCRIPT,
-            1,
-            key,
-            instanceId,
-            String(WORKER_PRESENCE_TTL_MS),
-          );
+          await client.eval(RENEW_SCRIPT, 1, key, instanceId, String(WORKER_PRESENCE_TTL_MS));
         } else {
           await client.zrem(key, instanceId);
         }
@@ -144,9 +135,7 @@ export function startWorkerHeartbeat(
 let readsStopped = false;
 let activeReader: Redis | undefined;
 let readInFlight: Promise<WorkerPresence | null> | undefined;
-let cachedRead:
-  | { value: WorkerPresence | null; expiresAt: number }
-  | undefined;
+let cachedRead: { value: WorkerPresence | null; expiresAt: number } | undefined;
 
 async function readPresence(): Promise<WorkerPresence | null> {
   const client = createPresenceClient(false);
@@ -158,12 +147,7 @@ async function readPresence(): Promise<WorkerPresence | null> {
     const operation = (async (): Promise<WorkerPresence> => {
       await client.connect();
 
-      const result: unknown = await client.eval(
-        READ_SCRIPT,
-        2,
-        KEYS.deployment,
-        KEYS.outbox,
-      );
+      const result: unknown = await client.eval(READ_SCRIPT, 2, KEYS.deployment, KEYS.outbox);
 
       if (!Array.isArray(result) || result.length !== 2) {
         throw new Error('Invalid worker heartbeat response');

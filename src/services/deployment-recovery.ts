@@ -1,4 +1,4 @@
-import { reconcileDeploymentQueueItem } from "./deployment-recovery-item.js";
+import { reconcileDeploymentQueueItem } from './deployment-recovery-item.js';
 import { prisma } from '../config/database.js';
 import { deploymentQueue } from '../queues/deployment-queue.js';
 import { MAX_ATTEMPTS, CLAIM_LEASE_MS } from './deployment-outbox.js';
@@ -27,14 +27,11 @@ export async function reconcileDeploymentQueueState(): Promise<number> {
 
   for (const candidate of candidates) {
     try {
-      const changed = await reconcileDeploymentQueueItem(
-        candidate.id,
-        {
-          getJob: (jobId) => deploymentQueue.getJob(jobId),
-          maxDispatchAttempts: MAX_ATTEMPTS,
-          claimLeaseMs: CLAIM_LEASE_MS,
-        },
-      );
+      const changed = await reconcileDeploymentQueueItem(candidate.id, {
+        getJob: (jobId) => deploymentQueue.getJob(jobId),
+        maxDispatchAttempts: MAX_ATTEMPTS,
+        claimLeaseMs: CLAIM_LEASE_MS,
+      });
 
       if (changed) {
         reconciled += 1;

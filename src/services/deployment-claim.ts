@@ -1,6 +1,10 @@
 import type { Job } from 'bullmq';
 
 import { prisma } from '../config/database.js';
+import {
+  DeploymentAccountSuspendedError,
+  lockDeploymentOwner,
+} from './deployment-account-guard.js';
 
 export const DEPLOYMENT_LOCK_DURATION_MS = 60_000;
 
@@ -29,7 +33,6 @@ export async function claimDeploymentExecution(
     throw new Error('Invalid deployment job identity or execution number');
   }
 
-  // Confirm the job corresponds to a persisted deployment request.
   const event = await prisma.deploymentOutbox.findFirst({
     where: {
       id: outboxEventId,
@@ -57,6 +60,8 @@ export async function claimDeploymentExecution(
   }
 
   return prisma.$transaction(async (tx) => {
+    // Lock the personal owner before touching the deployment.
+    const ownerActive = await lockDeploymentOwner(tx, projectId);
     const now = new Date();
 
     const claimed = await tx.deployment.updateMany({
@@ -66,13 +71,11 @@ export async function claimDeploymentExecution(
         commitSha,
         OR: [
           {
-            // First claim for a newly queued deployment.
             processingJobId: null,
             processingToken: null,
             status: { in: ['PENDING', 'QUEUED'] },
           },
           {
-            // A later execution of the same job may replace its old claim.
             processingJobId: jobId,
             processingAttempt: { lt: attempt },
             status: { in: ['PENDING', 'QUEUED', 'BUILDING'] },
@@ -89,16 +92,43 @@ export async function claimDeploymentExecution(
       },
     });
 
+    // Stale executions must not modify a newer claim.
     if (claimed.count !== 1) {
       return false;
     }
 
-    // Check again while holding the database row lock.
-    // Failure rolls back the claim.
     if ((await job.extendLock(queueToken, DEPLOYMENT_LOCK_DURATION_MS)) !== 1) {
       throw new Error('Deployment queue ownership was lost during claiming');
     }
 
+    // Commit the terminal state and return false so the worker skips building.
+    if (!ownerActive) {
+      const stopped = await tx.deployment.updateMany({
+        where: {
+          id: deploymentId,
+          projectId,
+          status: 'BUILDING',
+          processingToken,
+          processingJobId: jobId,
+          processingAttempt: attempt,
+        },
+        data: {
+          status: 'FAILED',
+          failureReason: new DeploymentAccountSuspendedError().message,
+          buildFinishedAt: now,
+          processingToken: null,
+          processingStartedAt: null,
+        },
+      });
+
+      if (stopped.count !== 1) {
+        throw new Error('Deployment ownership changed while stopping the build.');
+      }
+
+      return false;
+    }
+
+    // Only an allowed build receives its first build-start timestamp.
     await tx.deployment.updateMany({
       where: {
         id: deploymentId,

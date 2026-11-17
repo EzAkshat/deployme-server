@@ -1,3 +1,4 @@
+import { stopProjectActivityListener } from './services/project-activity-listener.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { prisma } from './config/database.js';
@@ -10,14 +11,20 @@ import { stopWorkerPresenceChecks } from './services/worker-presence.js';
 
 const SHUTDOWN_TIMEOUT_MS = 15_000;
 
-const server = app.listen(env.PORT, (error?: Error) => {
-  if (error) {
-    handleServerError(error);
-    return;
-  }
+const server = app.listen(
+  {
+    port: env.PORT,
+    host: env.API_HOST,
+  },
+  (error?: Error) => {
+    if (error) {
+      handleServerError(error);
+      return;
+    }
 
-  console.log(`DeployMe API listening on port ${env.PORT} (${env.NODE_ENV})`);
-});
+    console.log(`DeployMe API listening on ${env.API_HOST}:${env.PORT} (${env.NODE_ENV})`);
+  },
+);
 
 server.on('error', handleServerError);
 
@@ -33,6 +40,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   if (stopping) return;
 
   stopping = true;
+  stopProjectActivityListener();
   stopReadinessChecks();
   stopWorkerPresenceChecks();
   console.log(`Received ${signal}; stopping DeployMe API...`);

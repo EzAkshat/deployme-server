@@ -2,6 +2,13 @@ import { prisma } from '../config/database.js';
 
 export type ProjectPermission = 'VIEW' | 'DEPLOY' | 'MANAGE';
 
+export interface ProjectPermissions {
+  canView: boolean;
+  canDeploy: boolean;
+  canManage: boolean;
+  canManageSharing: boolean;
+}
+
 export class ProjectAuthorizationError extends Error {
   constructor(
     public readonly code: string,
@@ -12,11 +19,17 @@ export class ProjectAuthorizationError extends Error {
   }
 }
 
-async function hasProjectPermission(
+export async function getProjectPermissions(
   userId: number,
   projectId: string,
-  permission: ProjectPermission,
-): Promise<boolean> {
+): Promise<ProjectPermissions> {
+  const denied: ProjectPermissions = {
+    canView: false,
+    canDeploy: false,
+    canManage: false,
+    canManageSharing: false,
+  };
+
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     select: {
@@ -43,67 +56,79 @@ async function hasProjectPermission(
   });
 
   if (!project || project.archivedAt !== null) {
-    return false;
+    return denied;
   }
+  const account = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { suspendedAt: true },
+  });
 
-  // Personal projects must have an owner and no team.
+  if (!account || account.suspendedAt !== null) {
+    return denied;
+  }
   if (project.ownerUserId !== null) {
-    return (
-      project.teamId === null &&
-      project.ownerUserId === userId
-    );
+    if (project.teamId !== null || project.ownerUserId !== userId) {
+      return denied;
+    }
+
+    return {
+      canView: true,
+      canDeploy: true,
+      canManage: true,
+      canManageSharing: false,
+    };
   }
 
   if (project.teamId === null) {
-    return false;
+    return denied;
   }
 
-  // A leftover share never substitutes for current team membership.
+  // A share never substitutes for current team membership.
   const membership = project.team?.memberships[0];
 
   if (!membership) {
-    return false;
+    return denied;
   }
 
   const share = project.shares[0];
-  const isManager =
-    membership.role === 'OWNER' ||
-    membership.role === 'MANAGER';
+  const isManager = membership.role === 'OWNER' || membership.role === 'MANAGER';
+
+  return {
+    canView: isManager || share?.canView === true,
+    canDeploy: share?.canDeploy === true,
+    canManage: isManager || share?.canManage === true,
+    canManageSharing: isManager,
+  };
+}
+
+async function hasProjectPermission(
+  userId: number,
+  projectId: string,
+  permission: ProjectPermission,
+): Promise<boolean> {
+  const permissions = await getProjectPermissions(userId, projectId);
 
   switch (permission) {
     case 'VIEW':
-      return isManager || share?.canView === true;
-
+      return permissions.canView;
     case 'DEPLOY':
-      // Every team role requires an explicit deployment grant.
-      return share?.canDeploy === true;
-
+      return permissions.canDeploy;
     case 'MANAGE':
-      return isManager || share?.canManage === true;
-
+      return permissions.canManage;
     default:
       return false;
   }
 }
 
-export async function canViewProject(
-  userId: number,
-  projectId: string,
-): Promise<boolean> {
+export async function canViewProject(userId: number, projectId: string): Promise<boolean> {
   return hasProjectPermission(userId, projectId, 'VIEW');
 }
 
-export async function canDeployToProject(
-  userId: number,
-  projectId: string,
-): Promise<boolean> {
+export async function canDeployToProject(userId: number, projectId: string): Promise<boolean> {
   return hasProjectPermission(userId, projectId, 'DEPLOY');
 }
 
-export async function canManageProject(
-  userId: number,
-  projectId: string,
-): Promise<boolean> {
+export async function canManageProject(userId: number, projectId: string): Promise<boolean> {
   return hasProjectPermission(userId, projectId, 'MANAGE');
 }
 
@@ -112,11 +137,7 @@ export async function requireProjectPermission(
   projectId: string,
   permission: ProjectPermission,
 ): Promise<void> {
-  const allowed = await hasProjectPermission(
-    userId,
-    projectId,
-    permission,
-  );
+  const allowed = await hasProjectPermission(userId, projectId, permission);
 
   if (!allowed) {
     throw new ProjectAuthorizationError(

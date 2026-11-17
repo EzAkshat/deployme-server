@@ -15,11 +15,7 @@ let scanning = false;
 let scanAfterName: string | undefined;
 
 function errorCode(error: unknown): unknown {
-  return typeof error === 'object' &&
-    error !== null &&
-    'code' in error
-    ? error.code
-    : undefined;
+  return typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
 }
 
 function processDefinitelyGone(pid: number): boolean {
@@ -49,11 +45,7 @@ export async function cleanupAbandonedBuildTempDirectories(): Promise<number> {
     const entries = await readdir(root, { withFileTypes: true });
 
     const names = entries
-      .filter(
-        (entry) =>
-          entry.isDirectory() &&
-          MANAGED_BUILD_TEMP_PATTERN.test(entry.name),
-      )
+      .filter((entry) => entry.isDirectory() && MANAGED_BUILD_TEMP_PATTERN.test(entry.name))
       .map((entry) => entry.name)
       .sort();
 
@@ -62,8 +54,7 @@ export async function cleanupAbandonedBuildTempDirectories(): Promise<number> {
       .slice(0, BATCH_SIZE);
 
     const last = batch[batch.length - 1];
-    scanAfterName =
-      batch.length === BATCH_SIZE && last ? last : undefined;
+    scanAfterName = batch.length === BATCH_SIZE && last ? last : undefined;
 
     let removed = 0;
 
@@ -88,8 +79,7 @@ export async function cleanupAbandonedBuildTempDirectories(): Promise<number> {
 
         if (!before.isDirectory() || before.isSymbolicLink()) continue;
 
-        const createdAt =
-          before.birthtimeMs > 0 ? before.birthtimeMs : before.mtimeMs;
+        const createdAt = before.birthtimeMs > 0 ? before.birthtimeMs : before.mtimeMs;
 
         if (Date.now() - createdAt < MINIMUM_AGE_MS) continue;
 

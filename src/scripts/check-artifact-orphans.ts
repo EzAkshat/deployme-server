@@ -3,10 +3,7 @@ import { ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { prisma } from '../config/database.js';
 import { r2, r2BucketName } from '../config/r2.js';
 import { createArtifactObjectKey } from '../services/artifact-object.js';
-import {
-  isDisabledDeliveryRoute,
-  readDeliveryRoute,
-} from '../services/delivery-route-storage.js';
+import { isDisabledDeliveryRoute, readDeliveryRoute } from '../services/delivery-route-storage.js';
 
 const GRACE_MS = 24 * 60 * 60 * 1_000;
 const MAX_PAGES = 100;
@@ -59,9 +56,7 @@ async function main(): Promise<void> {
         Bucket: r2BucketName,
         Prefix: rootPrefix,
         MaxKeys: 1_000,
-        ...(continuationToken
-          ? { ContinuationToken: continuationToken }
-          : {}),
+        ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
       }),
       { abortSignal: AbortSignal.timeout(30_000) },
     );
@@ -74,10 +69,9 @@ async function main(): Promise<void> {
         continue;
       }
 
-      const match =
-        /^([A-Za-z0-9_-]{1,128})\/([A-Za-z0-9_-]{1,128})\/(.+)$/.exec(
-          key.slice(rootPrefix.length),
-        );
+      const match = /^([A-Za-z0-9_-]{1,128})\/([A-Za-z0-9_-]{1,128})\/(.+)$/.exec(
+        key.slice(rootPrefix.length),
+      );
 
       const deploymentId = match?.[1];
       const processingToken = match?.[2];
@@ -87,8 +81,7 @@ async function main(): Promise<void> {
         continue;
       }
 
-      const prefix =
-        `${rootPrefix}${deploymentId}/${processingToken}/`;
+      const prefix = `${rootPrefix}${deploymentId}/${processingToken}/`;
 
       let attempt = attempts.get(prefix);
 
@@ -110,27 +103,16 @@ async function main(): Promise<void> {
       const size = object.Size;
       const modifiedAt = object.LastModified?.getTime();
 
-      if (
-        typeof size !== 'number' ||
-        !Number.isSafeInteger(size) ||
-        size < 0
-      ) {
+      if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) {
         attempt.metadataComplete = false;
       } else {
         attempt.observedBytes += size;
       }
 
-      if (
-        modifiedAt === undefined ||
-        !Number.isFinite(modifiedAt) ||
-        modifiedAt <= 0
-      ) {
+      if (modifiedAt === undefined || !Number.isFinite(modifiedAt) || modifiedAt <= 0) {
         attempt.metadataComplete = false;
       } else {
-        attempt.newestObjectMs = Math.max(
-          attempt.newestObjectMs,
-          modifiedAt,
-        );
+        attempt.newestObjectMs = Math.max(attempt.newestObjectMs, modifiedAt);
       }
     }
 
@@ -150,9 +132,7 @@ async function main(): Promise<void> {
   }
 
   if (!listingComplete) {
-    throw new Error(
-      'Project exceeds the scan page limit. No complete report generated.',
-    );
+    throw new Error('Project exceeds the scan page limit. No complete report generated.');
   }
 
   // Read the current project's delivery route after listing.
@@ -242,18 +222,13 @@ async function main(): Promise<void> {
     } else if (!attempt.metadataComplete) {
       classification = 'review';
       reason = 'Object size or modification metadata is incomplete.';
-    } else if (
-      !['READY', 'FAILED', 'CANCELLED'].includes(deployment.status)
-    ) {
+    } else if (!['READY', 'FAILED', 'CANCELLED'].includes(deployment.status)) {
       classification = 'deferred';
       reason = 'Deployment is not terminal.';
     } else if (deployment.processingToken !== null) {
       classification = 'deferred';
       reason = 'Deployment still has a processing owner.';
-    } else if (
-      attempt.newestObjectMs > cutoff ||
-      deployment.updatedAt.getTime() > cutoff
-    ) {
+    } else if (attempt.newestObjectMs > cutoff || deployment.updatedAt.getTime() > cutoff) {
       classification = 'deferred';
       reason = 'Objects or deployment changed within the 24-hour grace period.';
     } else {
@@ -272,37 +247,38 @@ async function main(): Promise<void> {
       objectCount: attempt.objectCount,
       observedBytes: attempt.observedBytes,
       newestObjectAt:
-        attempt.newestObjectMs > 0
-          ? new Date(attempt.newestObjectMs).toISOString()
-          : null,
+        attempt.newestObjectMs > 0 ? new Date(attempt.newestObjectMs).toISOString() : null,
     });
   }
 
-  console.log(JSON.stringify({
-    mode: 'read-only',
-    projectId,
-    bucket: r2BucketName,
-    scanStartedAt,
-    scanFinishedAt: new Date(),
-    listingComplete,
-    graceHours: 24,
-    routeState,
-    archivedAt: project.archivedAt,
-    attemptCount: attempts.size,
-    unrecognizedObjectCount,
-    counts,
-    candidateBytes,
-    results,
-  }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        mode: 'read-only',
+        projectId,
+        bucket: r2BucketName,
+        scanStartedAt,
+        scanFinishedAt: new Date(),
+        listingComplete,
+        graceHours: 24,
+        routeState,
+        archivedAt: project.archivedAt,
+        attemptCount: attempts.size,
+        unrecognizedObjectCount,
+        counts,
+        candidateBytes,
+        results,
+      },
+      null,
+      2,
+    ),
+  );
 }
 
 try {
   await main();
 } catch (error: unknown) {
-  console.error(
-    'Artifact scan failed:',
-    error instanceof Error ? error.message : String(error),
-  );
+  console.error('Artifact scan failed:', error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 } finally {
   r2.destroy();

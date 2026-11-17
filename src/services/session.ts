@@ -10,17 +10,41 @@ const hashSessionToken = (token: string): string =>
 export async function createSession(userId: number) {
   const token = randomBytes(32).toString('base64url');
   const tokenHash = hashSessionToken(token);
-  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
 
-  await prisma.session.create({
-    data: {
-      userId,
-      tokenHash,
-      expiresAt,
-    },
+  const expiresAt = await prisma.$transaction(async (tx) => {
+    // Suspension must lock this same user row before changing
+    // account state and revoking sessions.
+    await tx.$queryRaw`
+      SELECT "id"
+      FROM "User"
+      WHERE "id" = ${userId}
+      FOR UPDATE
+    `;
+
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      select: {
+        suspendedAt: true,
+      },
+    });
+
+    if (!user || user.suspendedAt !== null) {
+      throw new AccountUnavailableError();
+    }
+
+    const expiry = new Date(Date.now() + SESSION_TTL_MS);
+
+    await tx.session.create({
+      data: {
+        userId,
+        tokenHash,
+        expiresAt: expiry,
+      },
+    });
+
+    return expiry;
   });
 
-  // Return the raw token only to the caller so it can set the cookie.
   return { token, expiresAt };
 }
 
@@ -34,7 +58,12 @@ export async function getActiveSession(token: string) {
     include: { user: true },
   });
 
-  if (!session || session.revokedAt !== null || session.expiresAt.getTime() <= Date.now()) {
+  if (
+    !session ||
+    session.revokedAt !== null ||
+    session.expiresAt.getTime() <= Date.now() ||
+    session.user.suspendedAt !== null
+  ) {
     return null;
   }
 
@@ -58,4 +87,11 @@ export async function revokeSession(token: string): Promise<void> {
     },
     data: { revokedAt: new Date() },
   });
+}
+
+export class AccountUnavailableError extends Error {
+  constructor() {
+    super('This account cannot sign in.');
+    this.name = 'AccountUnavailableError';
+  }
 }

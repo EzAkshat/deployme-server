@@ -16,9 +16,11 @@ import {
   TeamServiceError,
   removeTeamMember,
   leaveTeam,
-    changeTeamMemberRole,
+  changeTeamMemberRole,
   transferTeamOwnership,
+  declineTeamInvitation
 } from '../services/teams.js';
+import { createInvitationResponseRateLimit } from '../middleware/invitation-rate-limit.js';
 
 const createTeamSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -39,16 +41,20 @@ const createInvitationSchema = z.object({
 });
 
 const acceptInvitationSchema = z.object({
-  token: z.string().regex(/^[a-f0-9]{64}$/i),
+  token: z.string().regex(/^(?:[A-Za-z0-9_-]{8}|[a-fA-F0-9]{64})$/),
 });
 
-const changeTeamRoleSchema = z.object({
-  role: z.enum(['OWNER', 'MANAGER', 'MEMBER']),
-}).strict();
+const changeTeamRoleSchema = z
+  .object({
+    role: z.enum(['OWNER', 'MANAGER', 'MEMBER']),
+  })
+  .strict();
 
-const transferTeamOwnershipSchema = z.object({
-  userId: z.number().int().positive().safe(),
-}).strict();
+const transferTeamOwnershipSchema = z
+  .object({
+    userId: z.number().int().positive().safe(),
+  })
+  .strict();
 
 function getRouteParam(value: string | string[] | undefined): string | null {
   return typeof value === 'string' ? value : null;
@@ -70,7 +76,7 @@ function handleTeamError(res: Response, error: unknown, operation: string): void
       TEAM_MEMBER_NOT_FOUND: 404,
       USE_LEAVE_TEAM: 400,
       LAST_TEAM_OWNER: 409,
-            TEAM_OWNER_REQUIRED: 403,
+      TEAM_OWNER_REQUIRED: 403,
       INVALID_TEAM_ROLE: 400,
       OWNERSHIP_TRANSFER_SELF: 400,
     };
@@ -105,7 +111,7 @@ export function createTeamsRouter(
   sendInvitationEmail: typeof sendTeamInvitationEmail = sendTeamInvitationEmail,
 ) {
   const teamsRouter = Router();
-
+  const invitationResponseRateLimit = createInvitationResponseRateLimit();
   // Create a team.
   teamsRouter.post('/', requireTrustedOrigin, requireAuth, async (req, res) => {
     const result = createTeamSchema.safeParse(req.body);
@@ -144,7 +150,7 @@ export function createTeamsRouter(
   });
 
   // Accept an invitation.
-  teamsRouter.post('/invitations/accept', requireTrustedOrigin, requireAuth, async (req, res) => {
+  teamsRouter.post('/invitations/accept', requireTrustedOrigin, requireAuth, invitationResponseRateLimit, async (req, res) => {
     const result = acceptInvitationSchema.safeParse(req.body);
 
     if (!result.success) {
@@ -169,7 +175,41 @@ export function createTeamsRouter(
       handleTeamError(res, error, 'Failed to accept team invitation');
     }
   });
+teamsRouter.post(
+  '/invitations/decline',
+  requireTrustedOrigin,
+  requireAuth,
+  invitationResponseRateLimit,
+  async (req, res) => {
+    const result = acceptInvitationSchema.safeParse(req.body);
 
+    if (!result.success) {
+      res.status(400).json({
+        error: {
+          message: 'Please provide a valid invitation token.',
+        },
+      });
+      return;
+    }
+
+    try {
+      const user = res.locals.authenticatedUser;
+
+      const invitation = await declineTeamInvitation(
+        user.id,
+        user.email,
+        result.data.token,
+      );
+
+      res.status(200).json({
+        message: 'Invitation declined. You have not joined the team.',
+        invitation,
+      });
+    } catch (error: unknown) {
+      handleTeamError(res, error, 'Failed to decline team invitation');
+    }
+  },
+);
   // Create an invitation.
   teamsRouter.post('/:teamId/invitations', requireTrustedOrigin, requireAuth, async (req, res) => {
     const teamId = getRouteParam(req.params.teamId);
@@ -284,48 +324,44 @@ export function createTeamsRouter(
     }
   });
   teamsRouter.delete(
-  '/:teamId/members/:userId',
-  requireTrustedOrigin,
-  requireAuth,
-  async (req, res) => {
-    const teamId = getRouteParam(req.params.teamId);
-    const rawUserId = getRouteParam(req.params.userId);
-    const targetUserId = Number(rawUserId);
+    '/:teamId/members/:userId',
+    requireTrustedOrigin,
+    requireAuth,
+    async (req, res) => {
+      const teamId = getRouteParam(req.params.teamId);
+      const rawUserId = getRouteParam(req.params.userId);
+      const targetUserId = Number(rawUserId);
 
-    if (
-      !teamId ||
-      !rawUserId ||
-      !/^[1-9]\d*$/.test(rawUserId) ||
-      !Number.isSafeInteger(targetUserId)
-    ) {
-      res.status(400).json({
-        error: { message: 'Valid team and user IDs are required.' },
-      });
-      return;
-    }
+      if (
+        !teamId ||
+        !rawUserId ||
+        !/^[1-9]\d*$/.test(rawUserId) ||
+        !Number.isSafeInteger(targetUserId)
+      ) {
+        res.status(400).json({
+          error: { message: 'Valid team and user IDs are required.' },
+        });
+        return;
+      }
 
-    try {
-      const result = await removeTeamMember(
-        teamId,
-        res.locals.authenticatedUser.id,
-        targetUserId,
-      );
+      try {
+        const result = await removeTeamMember(
+          teamId,
+          res.locals.authenticatedUser.id,
+          targetUserId,
+        );
 
-      res.status(200).json({
-        message: 'Team member removed.',
-        ...result,
-      });
-    } catch (error: unknown) {
-      handleTeamError(res, error, 'Team member removal failed');
-    }
-  },
-);
+        res.status(200).json({
+          message: 'Team member removed.',
+          ...result,
+        });
+      } catch (error: unknown) {
+        handleTeamError(res, error, 'Team member removal failed');
+      }
+    },
+  );
 
-teamsRouter.post(
-  '/:teamId/leave',
-  requireTrustedOrigin,
-  requireAuth,
-  async (req, res) => {
+  teamsRouter.post('/:teamId/leave', requireTrustedOrigin, requireAuth, async (req, res) => {
     const teamId = getRouteParam(req.params.teamId);
 
     if (!teamId) {
@@ -336,10 +372,7 @@ teamsRouter.post(
     }
 
     try {
-      const result = await leaveTeam(
-        teamId,
-        res.locals.authenticatedUser.id,
-      );
+      const result = await leaveTeam(teamId, res.locals.authenticatedUser.id);
 
       res.status(200).json({
         message: 'You have left the team.',
@@ -348,8 +381,7 @@ teamsRouter.post(
     } catch (error: unknown) {
       handleTeamError(res, error, 'Leaving team failed');
     }
-  },
-);
+  });
   teamsRouter.patch(
     '/:teamId/members/:userId/role',
     requireTrustedOrigin,

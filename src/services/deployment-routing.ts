@@ -8,6 +8,7 @@ import {
   readDeliveryRoute,
   writeDeliveryRoute,
 } from './delivery-route-storage.js';
+import { lockDeploymentOwner } from './deployment-account-guard.js';
 
 function readStoredRoute(record: unknown) {
   if (
@@ -33,7 +34,7 @@ function readStoredRoute(record: unknown) {
   return { artifactPrefix: record.artifactPrefix, spaFallback };
 }
 
-export type RoutingResult = 'published' | 'unchanged' | 'superseded' | 'inactive';
+export type RoutingResult = 'published' | 'unchanged' | 'superseded' | 'inactive' | 'suspended';
 
 export interface DeploymentRoutingStorage {
   readDeliveryRoute: typeof readDeliveryRoute;
@@ -93,7 +94,7 @@ export async function reconcileDeploymentRoute(
 
     createArtifactObjectKey(prefix, 'index.html');
 
-const existing = await storage.readDeliveryRoute(subdomain);
+    const existing = await storage.readDeliveryRoute(subdomain);
     // A disabled route is a persistent barrier against delayed publishers.
     // Restoring a project will require a separate, explicit workflow.
     if (existing !== null && isDisabledDeliveryRoute(existing.record)) {
@@ -142,21 +143,74 @@ const existing = await storage.readDeliveryRoute(subdomain);
       }
     }
 
-    const written = await storage.writeDeliveryRoute(
-      subdomain,
-      {
-        version: 1,
-        projectId,
-        deploymentId,
-        deploymentCreatedAt: deployment.createdAt.toISOString(),
-        artifactPrefix: prefix,
-        spaFallback: deployment.project.spaFallback,
+    const outcome = await prisma.$transaction<'published' | 'conflict' | 'inactive' | 'suspended'>(
+      async (tx) => {
+        // The suspension endpoint must lock this same User row.
+        // Keep the lock until this publication attempt finishes.
+        if (!(await lockDeploymentOwner(tx, projectId))) {
+          return 'suspended';
+        }
+
+        // Recheck database state after acquiring the owner lock.
+        const current = await tx.deployment.findUnique({
+          where: { id: deploymentId },
+          select: {
+            projectId: true,
+            status: true,
+            artifactBucket: true,
+            artifactPrefix: true,
+            project: {
+              select: {
+                archivedAt: true,
+                subdomain: true,
+                spaFallback: true,
+              },
+            },
+          },
+        });
+
+        if (!current || current.projectId !== projectId) {
+          throw new Error('Routing deployment disappeared or changed ownership');
+        }
+
+        if (current.status !== 'READY' || current.project.archivedAt !== null) {
+          return 'inactive';
+        }
+
+        if (
+          current.artifactBucket !== deployment.artifactBucket ||
+          current.artifactPrefix !== prefix ||
+          current.project.subdomain !== subdomain ||
+          current.project.spaFallback !== deployment.project.spaFallback
+        ) {
+          // Restart the outer loop with fresh settings and routing state.
+          return 'conflict';
+        }
+
+        const written = await storage.writeDeliveryRoute(
+          subdomain,
+          {
+            version: 1,
+            projectId,
+            deploymentId,
+            deploymentCreatedAt: deployment.createdAt.toISOString(),
+            artifactPrefix: prefix,
+            spaFallback: current.project.spaFallback,
+          },
+          existing?.etag ?? null,
+        );
+
+        return written ? 'published' : 'conflict';
       },
-      existing?.etag ?? null,
+      {
+        maxWait: 5_000,
+        // The storage writer already has a 15-second request timeout.
+        timeout: 30_000,
+      },
     );
 
-    if (written) {
-      return 'published';
+    if (outcome !== 'conflict') {
+      return outcome;
     }
 
     // Another handler changed the record. Re-read before deciding again.

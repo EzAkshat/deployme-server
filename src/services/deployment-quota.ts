@@ -1,10 +1,10 @@
 import type { Prisma } from '../generated/prisma/client.js';
+import { lockActiveAccount } from './account-availability.js';
 
 export const MAX_UNFINISHED_DEPLOYMENTS = 5;
 
 export type DeploymentQuotaScope =
-  | { kind: 'personal'; userId: number }
-  | { kind: 'team'; teamId: string };
+  { kind: 'personal'; userId: number } | { kind: 'team'; teamId: string };
 
 export class DeploymentQuotaError extends Error {
   readonly code = 'DEPLOYMENT_QUOTA_EXCEEDED';
@@ -41,11 +41,7 @@ export async function getProjectDeploymentQuotaScope(
     return { kind: 'personal', userId: project.ownerUserId };
   }
 
-  if (
-    project?.teamId !== null &&
-    project?.teamId !== undefined &&
-    project.ownerUserId === null
-  ) {
+  if (project?.teamId !== null && project?.teamId !== undefined && project.ownerUserId === null) {
     return { kind: 'team', teamId: project.teamId };
   }
 
@@ -63,10 +59,7 @@ export async function lockDeploymentQuota(
   tx: Prisma.TransactionClient,
   scope: DeploymentQuotaScope,
 ): Promise<void> {
-  const scopeKey =
-    scope.kind === 'personal'
-      ? `personal:${scope.userId}`
-      : `team:${scope.teamId}`;
+  const scopeKey = scope.kind === 'personal' ? `personal:${scope.userId}` : `team:${scope.teamId}`;
 
   await tx.deploymentQuotaLock.upsert({
     where: { scopeKey },
@@ -89,6 +82,9 @@ export async function assertDeploymentQuotaAvailable(
   tx: Prisma.TransactionClient,
   scope: DeploymentQuotaScope,
 ): Promise<void> {
+  if (scope.kind === 'personal') {
+    await lockActiveAccount(tx, scope.userId);
+  }
   const activeCount = await tx.deployment.count({
     where: {
       status: { in: ['PENDING', 'QUEUED', 'BUILDING'] },
@@ -108,10 +104,7 @@ export async function assertDeploymentQuotaAvailable(
   // Archived projects are intentionally included while their
   // deployments are still unfinished.
   if (activeCount >= MAX_UNFINISHED_DEPLOYMENTS) {
-    throw new DeploymentQuotaError(
-      activeCount,
-      MAX_UNFINISHED_DEPLOYMENTS,
-    );
+    throw new DeploymentQuotaError(activeCount, MAX_UNFINISHED_DEPLOYMENTS);
   }
 }
 

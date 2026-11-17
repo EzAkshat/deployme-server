@@ -1,0 +1,28 @@
+[Unit]
+Description=DeployMe outbox dispatcher
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=deployme
+Group=deployme
+SupplementaryGroups=docker
+WorkingDirectory=/opt/deployme/server
+Environment=NODE_ENV=production
+Environment=DOCKER_SOCKET_PATH=/var/run/docker.sock
+Environment=TMPDIR=/var/lib/deployme-build-tmp
+StateDirectory=deployme-build-tmp
+StateDirectoryMode=0700
+PrivateTmp=false
+ExecStart=/usr/bin/node --env-file=/etc/deployme/backend.env dist/workers/outbox-dispatcher.js
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=31min
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -8,15 +8,9 @@ import {
   writeDeliveryRoute,
 } from './delivery-route-storage.js';
 
-export type DisableProjectRouteResult =
-  | 'disabled'
-  | 'unchanged'
-  | 'no-subdomain';
+export type DisableProjectRouteResult = 'disabled' | 'unchanged' | 'no-subdomain';
 
-function requireRouteOwnership(
-  record: unknown,
-  projectId: string,
-): void {
+function requireRouteOwnership(record: unknown, projectId: string): void {
   if (
     typeof record !== 'object' ||
     record === null ||
@@ -31,11 +25,7 @@ function requireRouteOwnership(
   createArtifactObjectKey(record.artifactPrefix, 'index.html');
 
   // Legacy route records may not contain projectId.
-  if (
-    !record.artifactPrefix.startsWith(
-      `projects/${projectId}/deployments/`,
-    )
-  ) {
+  if (!record.artifactPrefix.startsWith(`projects/${projectId}/deployments/`)) {
     throw new Error('Delivery route belongs to another project');
   }
 

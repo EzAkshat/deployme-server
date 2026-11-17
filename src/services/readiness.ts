@@ -22,9 +22,7 @@ let activeRedisProbe: Redis | undefined;
  * Bounds the response time. This does not cancel the underlying operation.
  * The production database check below allows only one outstanding query.
  */
-export async function checkDatabaseReadiness(
-  probe: DatabaseProbe,
-): Promise<boolean> {
+export async function checkDatabaseReadiness(probe: DatabaseProbe): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   try {

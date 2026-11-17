@@ -64,7 +64,7 @@ githubWebhooksRouter.post('/', async (req, res) => {
       ...('deploymentId' in result ? { deploymentId: result.deploymentId } : {}),
     });
   } catch (error: unknown) {
-        if (error instanceof DeploymentQuotaError) {
+    if (error instanceof DeploymentQuotaError) {
       res.setHeader('Retry-After', '30');
       res.status(429).json({
         error: {

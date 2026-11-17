@@ -10,9 +10,11 @@ import { processProjectArchiveOutbox } from '../services/project-archive-outbox.
 import { cleanupAbandonedBuildTempDirectories } from '../services/build-temp-cleanup.js';
 import { startWorkerHeartbeat } from '../services/worker-presence.js';
 import { performance } from 'node:perf_hooks';
+import { reconcileArtifactUploadAttempts } from '../services/artifact-upload-reconciliation.js';
+import { processArtifactUploadCleanup } from '../services/artifact-upload-cleanup.js';
 
 const POLL_INTERVAL_MS = 2_000;
-const SHUTDOWN_TIMEOUT_MS = 10_000;
+const SHUTDOWN_TIMEOUT_MS = 120_000;
 // Operational threshold for detecting a poll that stops making progress.
 const POLL_PROGRESS_TIMEOUT_MS = 5 * 60_000;
 
@@ -41,6 +43,8 @@ async function poll(): Promise<void> {
     cleanupResult,
     archiveResult,
     tempCleanupResult,
+    artifactReconciliationResult,
+    artifactCleanupResult,
   ] = await Promise.allSettled([
     dispatchDeploymentOutboxBatch(),
     processDeploymentRoutingOutbox(),
@@ -48,6 +52,8 @@ async function poll(): Promise<void> {
     cleanupAbandonedBuildContainers(),
     processProjectArchiveOutbox(),
     cleanupAbandonedBuildTempDirectories(),
+    reconcileArtifactUploadAttempts(),
+    processArtifactUploadCleanup(),
   ]);
 
   if (dispatchResult.status === 'fulfilled') {
@@ -87,6 +93,18 @@ async function poll(): Promise<void> {
     }
   } else {
     console.error('Build temporary-directory scan failed:', tempCleanupResult.reason);
+  }
+  if (artifactReconciliationResult.status === 'fulfilled') {
+    if (artifactReconciliationResult.value > 0) {
+      console.log(
+        `Scheduled ${artifactReconciliationResult.value} abandoned artifact upload(s) for cleanup.`,
+      );
+    }
+  } else {
+    console.error('Artifact upload reconciliation failed:', artifactReconciliationResult.reason);
+  }
+  if (artifactCleanupResult.status === 'rejected') {
+    console.error('Artifact upload cleanup failed:', artifactCleanupResult.reason);
   }
   lastCompletedPollAt = performance.now();
 

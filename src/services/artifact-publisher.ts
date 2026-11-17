@@ -11,6 +11,7 @@ import {
   createArtifactPrefix,
   uploadArtifactFile,
 } from './artifact-object.js';
+import { registerArtifactUploadAttempt } from './artifact-upload-attempts.js';
 
 interface PublishArtifactsInput {
   projectId: string;
@@ -89,6 +90,12 @@ export async function publishArtifacts(input: PublishArtifactsInput): Promise<Pu
   if (totalFileBytes > 500 * 1024 * 1024) {
     throw new Error('Artifacts exceed the total size limit');
   }
+
+  await registerArtifactUploadAttempt({
+    deploymentId: input.deploymentId,
+    projectId: input.projectId,
+    processingToken: input.processingToken,
+  });
 
   const extract = tar.extract();
   const controller = new AbortController();

@@ -3,6 +3,7 @@ import { env } from '../config/env.js';
 import { prisma } from '../config/database.js';
 import { captureDeploymentBuildSettings } from './deployment-build-settings.js';
 import { enforceProjectDeploymentQuota } from './deployment-quota.js';
+import { AccountSuspendedError } from './account-availability.js';
 
 export class GitHubWebhookError extends Error {
   constructor(
@@ -154,7 +155,15 @@ export async function processGitHubWebhookDelivery(input: {
 
       const projectId = repository.project.id;
 
-      await enforceProjectDeploymentQuota(tx, projectId);
+      try {
+        await enforceProjectDeploymentQuota(tx, projectId);
+      } catch (error) {
+        if (error instanceof AccountSuspendedError) {
+          return ignoreDelivery();
+        }
+
+        throw error;
+      }
 
       const deployment = await tx.deployment.create({
         data: {

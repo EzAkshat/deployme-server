@@ -220,11 +220,15 @@ export async function inspectGitHubProject(userId: number, input: GitHubInspecti
 
   const packageJson = await readManifest('package.json');
   const packageLockJson = await readManifest('package-lock.json');
+  const pnpmLockYaml = await readManifest('pnpm-lock.yaml');
+  const pnpmWorkspaceYaml = await readManifest('pnpm-workspace.yaml');
 
   const detection = detectProjectSettings({
-    fileNames: files.map((file) => file.path),
+    ...(pnpmWorkspaceYaml !== undefined && { pnpmWorkspaceYaml }),
+    fileNames: entries.map((entry) => entry.path),
     ...(packageJson !== undefined && { packageJson }),
     ...(packageLockJson !== undefined && { packageLockJson }),
+    ...(pnpmLockYaml !== undefined && { pnpmLockYaml }),
   });
 
   return {

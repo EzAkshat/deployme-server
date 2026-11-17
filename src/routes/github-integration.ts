@@ -13,7 +13,29 @@ import {
   GitHubInspectionError,
 } from '../services/github-project-inspection.js';
 import { ProjectServiceError } from '../services/projects.js';
+
 export const githubIntegrationRouter = Router();
+
+githubIntegrationRouter.get('/connection', requireAuth, async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+
+  try {
+    const connection = await prisma.gitHubConnection.findUnique({
+      where: {
+        userId: res.locals.authenticatedUser.id,
+      },
+      select: {
+        githubLogin: true,
+      },
+    });
+
+    res.status(200).json({ connection });
+  } catch {
+    res.status(500).json({
+      error: { message: 'Unable to load your GitHub connection.' },
+    });
+  }
+});
 
 const AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
 
@@ -249,7 +271,6 @@ githubIntegrationRouter.get('/callback', requireAuth, async (req, res) => {
     }
 
     const githubUserId = BigInt(profile.data.id);
-
     const credentials = {
       githubLogin: profile.data.login,
       accessTokenEncrypted: encryptGitHubToken(tokens.data.access_token, userId, 'access'),
@@ -331,6 +352,10 @@ githubIntegrationRouter.get('/callback', requireAuth, async (req, res) => {
       error instanceof Prisma.PrismaClientKnownRequestError &&
       (error.code === 'P2002' || error.code === 'P2034')
     ) {
+      console.error('GitHub connection database conflict.', {
+        code: error.code,
+        target: error.meta?.target,
+      });
       res.status(409).json({
         error: {
           message:

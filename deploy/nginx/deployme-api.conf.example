@@ -1,0 +1,66 @@
+# Include this file within nginx's http context.
+# Replace api.example.com with the chosen API hostname.
+# Enable only after the certificate files exist.
+#
+# Assumed topology:
+# Internet -> Nginx on this machine -> local Express API
+
+log_format deployme_api
+    '$remote_addr [$time_local] '
+    '"$request_method $uri $server_protocol" '
+    '$status $body_bytes_sent $request_time';
+
+server {
+    listen 80;
+    server_name api.example.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
+
+    location / {
+        return 308 https://api.example.com$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name api.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    server_tokens off;
+
+    # Avoid recording OAuth codes and other query parameters
+    # in the access log.
+    access_log /var/log/nginx/deployme-api.access.log deployme_api;
+    error_log /var/log/nginx/deployme-api.error.log warn;
+
+    client_max_body_size 1m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Overwrite client-supplied forwarding headers.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Forwarded "";
+        proxy_set_header Connection "";
+
+        # Deliver deployment events without response buffering.
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 90s;
+        proxy_send_timeout 90s;
+    }
+}

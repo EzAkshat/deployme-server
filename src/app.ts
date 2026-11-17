@@ -1,3 +1,4 @@
+import { projectActivityRouter } from './routes/project-activity.js';
 import express from 'express';
 import { AppError } from './utils/app-error.js';
 import { logger } from './config/logger.js';
@@ -12,7 +13,12 @@ import { projectsRouter } from './routes/projects.js';
 import { githubWebhooksRouter } from './routes/github-webhooks.js';
 import { githubIntegrationRouter } from './routes/github-integration.js';
 import { getWorkerPresence, WORKER_PRESENCE_TTL_MS } from './services/worker-presence.js';
+
 const app = express();
+
+if (env.TRUST_LOCAL_PROXY) {
+  app.set('trust proxy', 'loopback');
+}
 
 app.use(
   cors({
@@ -39,6 +45,7 @@ app.use(express.json());
 app.use('/auth', authRouter);
 app.use('/teams', teamsRouter);
 app.use('/admin', adminRouter);
+app.use('/projects', projectActivityRouter);
 app.use('/projects', projectsRouter);
 app.use('/webhooks/github', githubWebhooksRouter);
 app.use('/integrations/github', githubIntegrationRouter);
@@ -75,17 +82,11 @@ app.get('/ready/deployments', async (_req, res) => {
     getWorkerPresence(),
   ]);
 
-  const deploymentPresent =
-    presence !== null && presence.deployment > 0;
+  const deploymentPresent = presence !== null && presence.deployment > 0;
 
-  const outboxPresent =
-    presence !== null && presence.outbox > 0;
+  const outboxPresent = presence !== null && presence.outbox > 0;
 
-  const ready =
-    databaseReady &&
-    redisReady &&
-    deploymentPresent &&
-    outboxPresent;
+  const ready = databaseReady && redisReady && deploymentPresent && outboxPresent;
 
   res.status(ready ? 200 : 503).json({
     status: ready ? 'ready' : 'not_ready',
@@ -95,21 +96,11 @@ app.get('/ready/deployments', async (_req, res) => {
     heartbeatTtlSeconds: WORKER_PRESENCE_TTL_MS / 1_000,
     workers: {
       deployment: {
-        status:
-          presence === null
-            ? 'unknown'
-            : deploymentPresent
-              ? 'present'
-              : 'absent',
+        status: presence === null ? 'unknown' : deploymentPresent ? 'present' : 'absent',
         count: presence?.deployment ?? null,
       },
       outbox: {
-        status:
-          presence === null
-            ? 'unknown'
-            : outboxPresent
-              ? 'present'
-              : 'absent',
+        status: presence === null ? 'unknown' : outboxPresent ? 'present' : 'absent',
         count: presence?.outbox ?? null,
       },
     },

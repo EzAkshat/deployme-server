@@ -4,13 +4,21 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { docker } from '../config/docker.js';
-import { BUILD_IMAGE, BUILD_LIMITS, type BuildRunnerInput } from './build-runner.js';
+import {
+  BUILD_IMAGE,
+  BUILD_LIMITS,
+  PNPM_BUILD_IMAGE,
+  PNPM_INSTALL_COMMAND,
+  type BuildRunnerInput,
+} from './build-runner.js';
 import { startBuildResourceCollection } from './build-resource-usage.js';
 import { runContainerCommand } from './container-command.js';
 import { copyRepositoryToContainer } from './container-source.js';
 import { ContainerTimeoutError } from './container-lifecycle.js';
 import { resolveContainerOutputPath } from './build-output-path.js';
 import { downloadNpmTarballs } from './npm-tarball-downloader.js';
+import { preparePnpmBuildTarballs } from './pnpm-build-preparation.js';
+import { publicBuildVariableEnvironment } from './public-build-variables.js';
 
 async function prepareNpmTarballs(
   repositoryRoot: string,
@@ -31,7 +39,6 @@ async function prepareNpmTarballs(
   const lockfilePath = path.join(repositoryRoot, 'package-lock.json');
   const lockfile: unknown = JSON.parse(await readFile(lockfilePath, 'utf8'));
 
-  // The downloader validates the lockfile before fetching any tarball.
   return downloadNpmTarballs(lockfile, owner);
 }
 
@@ -56,13 +63,18 @@ export async function runIsolatedBuild(
   const outputPath = resolveContainerOutputPath(input.outputDirectory);
   const installCommand = input.installCommand.trim();
   const deadline = performance.now() + BUILD_LIMITS.timeoutMs;
+  const publicEnvironment = publicBuildVariableEnvironment(input.publicBuildVariables ?? {});
+  const usesPnpm = installCommand === PNPM_INSTALL_COMMAND;
 
-  const npmTarballs =
-    installCommand === 'npm ci'
-      ? await prepareNpmTarballs(input.repositoryRoot, {
-          deploymentId: input.deploymentId,
-          processingToken: input.processingToken,
-        })
+  const owner = {
+    deploymentId: input.deploymentId,
+    processingToken: input.processingToken,
+  };
+
+  const dependencyTarballs = usesPnpm
+    ? await preparePnpmBuildTarballs(input.repositoryRoot, owner)
+    : installCommand === 'npm ci'
+      ? await prepareNpmTarballs(input.repositoryRoot, owner)
       : null;
 
   let container: Container | undefined;
@@ -74,18 +86,59 @@ export async function runIsolatedBuild(
       '/tmp': 'rw,nosuid,nodev,size=128m,mode=1777',
     };
 
-    const env = ['HOME=/tmp', 'CI=true'];
+    const env = ['HOME=/tmp', 'CI=true', ...publicEnvironment];
     const phases: string[] = [];
 
-    if (npmTarballs) {
+    if (usesPnpm && dependencyTarballs) {
+      tmpfs['/workspace'] += ',exec';
+      tmpfs['/pnpm-store'] = 'rw,nosuid,nodev,exec,size=384m,mode=0700,uid=1000,gid=1000';
+
+      env.push(
+        'XDG_CACHE_HOME=/tmp/cache',
+        'XDG_CONFIG_HOME=/tmp/config',
+        'XDG_DATA_HOME=/tmp/data',
+        'COREPACK_ENABLE_NETWORK=0',
+        'COREPACK_ENABLE_DOWNLOAD_PROMPT=0',
+        'npm_config_cache=/tmp/npm-cache',
+      );
+
+      const pnpm = '/opt/deployme-tools/node_modules/.bin/pnpm';
+
+      // Populate the private store from verified, read-only tarballs.
+      // The container has no network access.
+      if (dependencyTarballs.files.length > 0) {
+        phases.push(`for archive in /tarballs/*.tgz; do
+          ${pnpm} store add "$archive" \
+            --store-dir /pnpm-store \
+            --state-dir /tmp/pnpm-state \
+            --reporter append-only || exit $?
+        done`);
+      }
+
+      phases.push(
+        [
+          pnpm,
+          'install',
+          '--offline',
+          '--frozen-lockfile',
+          '--trust-lockfile',
+          '--ignore-pnpmfile',
+          '--no-runtime',
+          '--store-dir /pnpm-store',
+          '--state-dir /tmp/pnpm-state',
+          '--node-linker isolated',
+          '--reporter append-only',
+        ].join(' '),
+      );
+    } else if (dependencyTarballs) {
       tmpfs['/workspace'] += ',exec';
       tmpfs['/npm-cache'] = 'rw,nosuid,nodev,noexec,size=384m,mode=0700,uid=1000,gid=1000';
 
       env.push('npm_config_cache=/npm-cache');
 
-      // Seed outside the repository so project-level npm settings do not
-      // affect this step. One archive at a time keeps temporary usage lower.
-      if (npmTarballs.files.length > 0) {
+      // Seed outside the repository so project-level npm settings
+      // do not affect cache preparation.
+      if (dependencyTarballs.files.length > 0) {
         phases.push(`cd /tmp && for archive in /tarballs/*.tgz; do
           npm cache add --offline --cache /npm-cache "$archive" || exit $?
         done`);
@@ -107,7 +160,7 @@ export async function runIsolatedBuild(
     const lifetimeMs = remainingBuildTime(deadline);
 
     container = await docker.createContainer({
-      Image: BUILD_IMAGE,
+      Image: usesPnpm ? PNPM_BUILD_IMAGE : BUILD_IMAGE,
       User: '1000:1000',
       WorkingDir: '/workspace',
       NetworkDisabled: true,
@@ -130,11 +183,11 @@ export async function runIsolatedBuild(
         NanoCpus: BUILD_LIMITS.cpus * 1_000_000_000,
         PidsLimit: BUILD_LIMITS.pids,
         Tmpfs: tmpfs,
-        Mounts: npmTarballs
+        Mounts: dependencyTarballs
           ? [
               {
                 Type: 'bind',
-                Source: npmTarballs.directory,
+                Source: dependencyTarballs.directory,
                 Target: '/tarballs',
                 ReadOnly: true,
               },
@@ -151,10 +204,9 @@ export async function runIsolatedBuild(
       input.processingToken,
     );
 
-    await copyRepositoryToContainer(container, input.repositoryRoot);
+    await copyRepositoryToContainer(container, input.repositoryRoot, owner);
 
-    // Each phase gets its own subshell. The build starts from /workspace
-    // even though cache seeding ran from /tmp.
+    // Each phase starts in /workspace in its own subshell.
     if (phases.length > 0) {
       const command = phases.map((phase) => `(\n${phase}\n)`).join(' &&\n');
 
@@ -169,7 +221,6 @@ export async function runIsolatedBuild(
     await processOutput(container, outputPath);
   } finally {
     try {
-      // Stop periodic sampling and save the final sample before removal.
       await resourceCollector?.close();
     } finally {
       try {
@@ -189,8 +240,8 @@ export async function runIsolatedBuild(
           });
         }
       } finally {
-        if (npmTarballs) {
-          await rm(npmTarballs.directory, {
+        if (dependencyTarballs) {
+          await rm(dependencyTarballs.directory, {
             recursive: true,
             force: true,
           });

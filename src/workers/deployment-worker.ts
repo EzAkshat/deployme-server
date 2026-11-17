@@ -1,4 +1,4 @@
-import { Worker, type Job } from 'bullmq';
+import { UnrecoverableError, Worker, type Job } from 'bullmq';
 import { randomUUID } from 'node:crypto';
 import { readdir, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
@@ -7,18 +7,29 @@ import { buildProjectArtifacts } from '../services/project-build.js';
 import { DEPLOYMENT_QUEUE_NAME } from '../queues/deployment-queue.js';
 import { redisConnection } from '../config/redis.js';
 import { prisma } from '../config/database.js';
-import { downloadRepositoryArchive, getConnectedRepositoryForDeployment } from '../services/github-app.js';
+import {
+  downloadRepositoryArchive,
+  getConnectedRepositoryForDeployment,
+} from '../services/github-app.js';
 import { extractRepositoryArchive } from '../services/archive-extractor.js';
 import { publishArtifacts } from '../services/artifact-publisher.js';
 import { ContainerTimeoutError } from '../services/container-lifecycle.js';
 import { ContainerCommandExitError } from '../services/container-command.js';
-import { DeploymentBuildSettingsError, readDeploymentBuildSettings } from '../services/deployment-build-settings.js';
+import {
+  DeploymentBuildSettingsError,
+  readDeploymentBuildSettings,
+} from '../services/deployment-build-settings.js';
 import { createDeploymentLogCollector } from '../services/deployment-logs.js';
-import { claimDeploymentExecution, DEPLOYMENT_LOCK_DURATION_MS } from '../services/deployment-claim.js';
+import {
+  claimDeploymentExecution,
+  DEPLOYMENT_LOCK_DURATION_MS,
+} from '../services/deployment-claim.js';
 import { createBuildTempDirectory } from '../services/build-temp-directory.js';
 import { startWorkerHeartbeat } from '../services/worker-presence.js';
 import { finalizeDeployment } from '../services/deployment-finalization.js';
 import { r2 } from '../config/r2.js';
+import { BuildConfigurationError } from '../services/build-configuration-error.js';
+import { DeploymentAccountSuspendedError } from '../services/deployment-account-guard.js';
 
 // Allow active deployments to finish during planned shutdown.
 // Exit earlier once worker.close() and resource cleanup complete.
@@ -280,6 +291,7 @@ async function processDeploymentJob(
         installCommand: buildSettings.installCommand,
         buildCommand: buildSettings.buildCommand,
         outputDirectory: buildSettings.outputDirectory,
+        publicBuildVariables: buildSettings.publicBuildVariables,
         onLog: (stream, text) => {
           logs?.append(stream, text);
         },
@@ -314,25 +326,39 @@ async function processDeploymentJob(
       ...published,
     });
 
-        await finalizeDeployment({
+    await finalizeDeployment({
       deploymentId,
       projectId,
       processingToken,
       published,
-      renewQueueLock: () =>
-        job.extendLock(queueToken, DEPLOYMENT_LOCK_DURATION_MS),
+      renewQueueLock: () => job.extendLock(queueToken, DEPLOYMENT_LOCK_DURATION_MS),
     });
   } catch (error) {
+    const configurationFailure = error instanceof BuildConfigurationError;
+    const accountSuspended = error instanceof DeploymentAccountSuspendedError;
+    const unrecoverable = error instanceof UnrecoverableError;
+
     const maxAttempts = job.opts.attempts ?? 1;
-    const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
-    logs?.append(
-      'system',
-      `${getDeploymentFailureReason(error)} ${
-        isFinalAttempt ? 'No build attempts remain.' : 'Another build attempt will be queued.'
-      }`,
-    );
+    const attemptsExhausted = job.attemptsMade + 1 >= maxAttempts;
+
+    const terminal = configurationFailure || accountSuspended || unrecoverable || attemptsExhausted;
+
+    const failureMessage =
+      configurationFailure || accountSuspended ? error.message : getDeploymentFailureReason(error);
+
+    const retryMessage = accountSuspended
+      ? 'Automatic retries were stopped. Request a new deployment after account access is restored.'
+      : configurationFailure
+        ? 'Fix the repository or build settings, then request a new deployment. Automatic retries were stopped.'
+        : unrecoverable
+          ? 'This failure cannot be retried automatically.'
+          : attemptsExhausted
+            ? 'No build attempts remain.'
+            : 'Another build attempt will be queued.';
+    logs?.append('system', `${failureMessage} ${retryMessage}`);
 
     await logs?.close();
+
     const released = await prisma.deployment.updateMany({
       where: {
         id: deploymentId,
@@ -341,9 +367,9 @@ async function processDeploymentJob(
         processingToken,
       },
       data: {
-        status: isFinalAttempt ? 'FAILED' : 'QUEUED',
-        failureReason: isFinalAttempt ? getDeploymentFailureReason(error) : null,
-        buildFinishedAt: isFinalAttempt ? new Date() : null,
+        status: terminal ? 'FAILED' : 'QUEUED',
+        failureReason: terminal ? failureMessage.slice(0, 255) : null,
+        buildFinishedAt: terminal ? new Date() : null,
         processingToken: null,
         processingStartedAt: null,
       },
@@ -353,22 +379,27 @@ async function processDeploymentJob(
       throw new Error('Could not release deployment: processing ownership was lost');
     }
 
+    // Stop queue retries only after the ownership-guarded database update.
+    if (configurationFailure || accountSuspended) {
+      throw new UnrecoverableError(failureMessage);
+    }
+
     throw error;
   } finally {
-    await logs?.close();
-    if (workspace) {
+    try {
+      await logs?.close();
+    } finally {
+      if (workspace) {
         await rm(workspace, {
           recursive: true,
           force: true,
         }).catch((cleanupError: unknown) => {
           console.error('Failed to clean deployment workspace.', {
             deploymentId,
-            error:
-              cleanupError instanceof Error
-                ? cleanupError.message
-                : String(cleanupError),
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
         });
-      });
+      }
     }
   }
 }
@@ -401,10 +432,7 @@ let shuttingDown = false;
 const heartbeat = startWorkerHeartbeat(
   'deployment',
   () =>
-    !shuttingDown &&
-    redisConnection.status === 'ready' &&
-    worker.isRunning() &&
-    !worker.isPaused(),
+    !shuttingDown && redisConnection.status === 'ready' && worker.isRunning() && !worker.isPaused(),
 );
 
 async function shutdown(signal: string): Promise<void> {

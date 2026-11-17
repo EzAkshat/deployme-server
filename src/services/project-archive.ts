@@ -36,16 +36,12 @@ export async function archiveProject(userId: number, projectId: string) {
 
     const allowed =
       project !== null &&
-      (
-        project.ownerUserId !== null
-          ? project.ownerUserId === userId
-          : membership !== undefined &&
-            (
-              membership.role === 'OWNER' ||
-              membership.role === 'MANAGER' ||
-              project.shares[0]?.canManage === true
-            )
-      );
+      (project.ownerUserId !== null
+        ? project.ownerUserId === userId
+        : membership !== undefined &&
+          (membership.role === 'OWNER' ||
+            membership.role === 'MANAGER' ||
+            project.shares[0]?.canManage === true));
 
     if (!project || !allowed) {
       throw new ProjectAuthorizationError(
@@ -80,9 +76,7 @@ export async function archiveProject(userId: number, projectId: string) {
       },
       alreadyArchived,
       deliveryDisableStatus:
-        event.processedAt === null
-          ? ('pending' as const)
-          : ('completed' as const),
+        event.processedAt === null ? ('pending' as const) : ('completed' as const),
     };
   });
 }
