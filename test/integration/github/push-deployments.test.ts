@@ -116,10 +116,7 @@ describe('GitHub push deployment creation', () => {
       return id;
     }
 
-    function deliver(
-      deliveryId: string,
-      body: unknown = payload,
-    ) {
+    function deliver(deliveryId: string, body: unknown = payload) {
       return processGitHubWebhookDelivery({
         deliveryId,
         event: 'push',
@@ -222,14 +219,8 @@ describe('GitHub push deployment creation', () => {
       f.deliver(deliveryId),
     ]);
 
-    assert.equal(
-      results.filter((result) => !result.duplicate).length,
-      1,
-    );
-    assert.equal(
-      results.filter((result) => result.duplicate).length,
-      2,
-    );
+    assert.equal(results.filter((result) => !result.duplicate).length, 1);
+    assert.equal(results.filter((result) => result.duplicate).length, 2);
 
     for (const result of results) {
       assert.equal(result.status, 'PROCESSED');
@@ -302,33 +293,25 @@ describe('GitHub push deployment creation', () => {
     const deliveryId = f.newDeliveryId();
 
     await prisma.deployment.createMany({
-      data: Array.from(
-        { length: MAX_UNFINISHED_DEPLOYMENTS },
-        () => ({
-          projectId: f.project.id,
-          commitSha: COMMIT_SHA,
-          status: 'PENDING' as const,
-        }),
-      ),
+      data: Array.from({ length: MAX_UNFINISHED_DEPLOYMENTS }, () => ({
+        projectId: f.project.id,
+        commitSha: COMMIT_SHA,
+        status: 'PENDING' as const,
+      })),
     });
 
     await assert.rejects(
       () => f.deliver(deliveryId),
       (error: unknown) =>
-        error instanceof DeploymentQuotaError &&
-        error.activeCount === MAX_UNFINISHED_DEPLOYMENTS,
+        error instanceof DeploymentQuotaError && error.activeCount === MAX_UNFINISHED_DEPLOYMENTS,
     );
 
-    assert.equal(
-      (await f.deployments()).length,
-      MAX_UNFINISHED_DEPLOYMENTS,
-    );
+    assert.equal((await f.deployments()).length, MAX_UNFINISHED_DEPLOYMENTS);
     assert.equal((await f.requestEvents()).length, 0);
 
-    const failedReceipt =
-      await prisma.gitHubWebhookDelivery.findUniqueOrThrow({
-        where: { deliveryId },
-      });
+    const failedReceipt = await prisma.gitHubWebhookDelivery.findUniqueOrThrow({
+      where: { deliveryId },
+    });
 
     assert.equal(failedReceipt.status, 'FAILED');
     assert.equal(failedReceipt.processedAt, null);
@@ -346,10 +329,7 @@ describe('GitHub push deployment creation', () => {
 
     assert.equal(retried.duplicate, false);
     assert.equal(retried.status, 'PROCESSED');
-    assert.equal(
-      (await f.deployments()).length,
-      MAX_UNFINISHED_DEPLOYMENTS + 1,
-    );
+    assert.equal((await f.deployments()).length, MAX_UNFINISHED_DEPLOYMENTS + 1);
     assert.equal((await f.requestEvents()).length, 1);
 
     const receipt = await prisma.gitHubWebhookDelivery.findUniqueOrThrow({

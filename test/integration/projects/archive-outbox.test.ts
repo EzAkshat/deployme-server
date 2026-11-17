@@ -1,17 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import {
-  after,
-  afterEach,
-  beforeEach,
-  describe,
-  it,
-} from 'node:test';
+import { after, afterEach, beforeEach, describe, it } from 'node:test';
 
 import { prisma } from '../../../src/config/database.js';
-import {
-  processClaimedProjectArchiveEvent,
-} from '../../../src/services/project-archive-outbox.js';
+import { processClaimedProjectArchiveEvent } from '../../../src/services/project-archive-outbox.js';
 
 describe('archive outbox completion and retries', () => {
   let ownerId: number | undefined;
@@ -113,13 +105,9 @@ describe('archive outbox completion and retries', () => {
     const before = Date.now();
 
     await assert.rejects(
-      processClaimedProjectArchiveEvent(
-        claimedEvent(),
-        claimToken,
-        async () => {
-          throw failure;
-        },
-      ),
+      processClaimedProjectArchiveEvent(claimedEvent(), claimToken, async () => {
+        throw failure;
+      }),
       (error: unknown) => error === failure,
     );
 
@@ -145,15 +133,10 @@ describe('archive outbox completion and retries', () => {
     const before = Date.now();
 
     await assert.rejects(
-      processClaimedProjectArchiveEvent(
-        claimedEvent(20),
-        claimToken,
-        async () => {
-          throw new Error(message);
-        },
-      ),
-      (error: unknown) =>
-        error instanceof Error && error.message === message,
+      processClaimedProjectArchiveEvent(claimedEvent(20), claimToken, async () => {
+        throw new Error(message);
+      }),
+      (error: unknown) => error instanceof Error && error.message === message,
     );
 
     const after = Date.now();
@@ -167,25 +150,20 @@ describe('archive outbox completion and retries', () => {
 
   it('does not acknowledge success after another worker replaces the claim', async () => {
     const replacementToken = randomUUID();
-    let replacement:
-      Awaited<ReturnType<typeof readEvent>> | undefined;
+    let replacement: Awaited<ReturnType<typeof readEvent>> | undefined;
 
-    const result = await processClaimedProjectArchiveEvent(
-      claimedEvent(),
-      claimToken,
-      async () => {
-        replacement = await prisma.projectArchiveOutbox.update({
-          where: { id: eventId },
-          data: {
-            claimToken: replacementToken,
-            claimedAt: new Date(),
-            attempts: 2,
-          },
-        });
+    const result = await processClaimedProjectArchiveEvent(claimedEvent(), claimToken, async () => {
+      replacement = await prisma.projectArchiveOutbox.update({
+        where: { id: eventId },
+        data: {
+          claimToken: replacementToken,
+          claimedAt: new Date(),
+          attempts: 2,
+        },
+      });
 
-        return 'disabled';
-      },
-    );
+      return 'disabled';
+    });
 
     assert.equal(result, 0);
     assert.deepEqual(await readEvent(), replacement);
@@ -193,27 +171,22 @@ describe('archive outbox completion and retries', () => {
 
   it('does not overwrite a newer claim when an old worker fails', async () => {
     const failure = new Error('Old worker failed');
-    let replacement:
-      Awaited<ReturnType<typeof readEvent>> | undefined;
+    let replacement: Awaited<ReturnType<typeof readEvent>> | undefined;
 
     await assert.rejects(
-      processClaimedProjectArchiveEvent(
-        claimedEvent(),
-        claimToken,
-        async () => {
-          replacement = await prisma.projectArchiveOutbox.update({
-            where: { id: eventId },
-            data: {
-              claimToken: randomUUID(),
-              claimedAt: new Date(),
-              attempts: 2,
-              lastError: 'Preserve newer worker state',
-            },
-          });
+      processClaimedProjectArchiveEvent(claimedEvent(), claimToken, async () => {
+        replacement = await prisma.projectArchiveOutbox.update({
+          where: { id: eventId },
+          data: {
+            claimToken: randomUUID(),
+            claimedAt: new Date(),
+            attempts: 2,
+            lastError: 'Preserve newer worker state',
+          },
+        });
 
-          throw failure;
-        },
-      ),
+        throw failure;
+      }),
       (error: unknown) => error === failure,
     );
 
@@ -222,13 +195,9 @@ describe('archive outbox completion and retries', () => {
 
   it('completes an event after a failed attempt is claimed again', async () => {
     await assert.rejects(
-      processClaimedProjectArchiveEvent(
-        claimedEvent(),
-        claimToken,
-        async () => {
-          throw new Error('Temporary failure');
-        },
-      ),
+      processClaimedProjectArchiveEvent(claimedEvent(), claimToken, async () => {
+        throw new Error('Temporary failure');
+      }),
       /Temporary failure/,
     );
 

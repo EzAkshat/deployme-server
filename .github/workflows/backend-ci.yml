@@ -20,7 +20,7 @@ jobs:
     env:
       NODE_ENV: test
       DOTENV_CONFIG_PATH: ${{ github.workspace }}/.env.test
-      DOTENV_CONFIG_QUIET: "true"
+      DOTENV_CONFIG_QUIET: 'true'
 
     steps:
       - name: Check out repository

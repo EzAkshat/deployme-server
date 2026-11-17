@@ -19,7 +19,8 @@
     "test:services:up": "docker compose -f compose.test.yml up -d --wait",
     "test:services:stop": "docker compose -f compose.test.yml stop",
     "start:deployment": "node --env-file-if-exists=.env dist/workers/deployment-worker.js",
-    "start:outbox": "node --env-file-if-exists=.env dist/workers/outbox-dispatcher.js"
+    "start:outbox": "node --env-file-if-exists=.env dist/workers/outbox-dispatcher.js",
+    "admin:bootstrap": "tsx --env-file-if-exists=.env src/scripts/bootstrap-super-admin.ts"
   },
   "keywords": [],
   "author": "",
@@ -43,6 +44,7 @@
     "pino-http": "^11.0.0",
     "resend": "^6.34.1",
     "tar-stream": "^3.2.2",
+    "yaml": "^2.9.1",
     "yauzl": "^3.4.0",
     "zod": "^4.6.7"
   },
@@ -52,6 +54,7 @@
     "@types/express": "^5.0.6",
     "@types/mime-types": "^3.0.1",
     "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "@types/tar-stream": "^3.1.5",
     "@types/yauzl": "^3.4.0",

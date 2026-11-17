@@ -54,10 +54,7 @@ describe('project archive requests', () => {
     const fixture = await createFixture();
     t.after(() => fixture.cleanup());
 
-    const result = await archiveProject(
-      fixture.owner.id,
-      fixture.project.id,
-    );
+    const result = await archiveProject(fixture.owner.id, fixture.project.id);
 
     assert.equal(result.alreadyArchived, false);
     assert.equal(result.deliveryDisableStatus, 'pending');
@@ -70,10 +67,7 @@ describe('project archive requests', () => {
     });
 
     assert.ok(project.archivedAt instanceof Date);
-    assert.equal(
-      project.archivedAt.getTime(),
-      result.project.archivedAt.getTime(),
-    );
+    assert.equal(project.archivedAt.getTime(), result.project.archivedAt.getTime());
     assert.equal(event.processedAt, null);
     assert.equal(event.attempts, 0);
     assert.equal(event.claimToken, null);
@@ -88,25 +82,16 @@ describe('project archive requests', () => {
       archiveProject(fixture.owner.id, fixture.project.id),
     ]);
 
-    assert.equal(
-      results.filter((result) => !result.alreadyArchived).length,
-      1,
-    );
+    assert.equal(results.filter((result) => !result.alreadyArchived).length, 1);
     assert.equal(
       results[0]!.project.archivedAt.getTime(),
       results[1]!.project.archivedAt.getTime(),
     );
 
-    const repeated = await archiveProject(
-      fixture.owner.id,
-      fixture.project.id,
-    );
+    const repeated = await archiveProject(fixture.owner.id, fixture.project.id);
 
     assert.equal(repeated.alreadyArchived, true);
-    assert.equal(
-      repeated.project.archivedAt.getTime(),
-      results[0]!.project.archivedAt.getTime(),
-    );
+    assert.equal(repeated.project.archivedAt.getTime(), results[0]!.project.archivedAt.getTime());
     assert.equal(
       await prisma.projectArchiveOutbox.count({
         where: { projectId: fixture.project.id },
@@ -119,10 +104,7 @@ describe('project archive requests', () => {
     const fixture = await createFixture();
     t.after(() => fixture.cleanup());
 
-    const first = await archiveProject(
-      fixture.owner.id,
-      fixture.project.id,
-    );
+    const first = await archiveProject(fixture.owner.id, fixture.project.id);
     const processedAt = new Date();
 
     const originalEvent = await prisma.projectArchiveOutbox.update({
@@ -130,20 +112,14 @@ describe('project archive requests', () => {
       data: { processedAt },
     });
 
-    const repeated = await archiveProject(
-      fixture.owner.id,
-      fixture.project.id,
-    );
+    const repeated = await archiveProject(fixture.owner.id, fixture.project.id);
     const event = await prisma.projectArchiveOutbox.findUniqueOrThrow({
       where: { projectId: fixture.project.id },
     });
 
     assert.equal(repeated.alreadyArchived, true);
     assert.equal(repeated.deliveryDisableStatus, 'completed');
-    assert.equal(
-      repeated.project.archivedAt.getTime(),
-      first.project.archivedAt.getTime(),
-    );
+    assert.equal(repeated.project.archivedAt.getTime(), first.project.archivedAt.getTime());
     assert.equal(event.id, originalEvent.id);
     assert.equal(event.processedAt?.getTime(), processedAt.getTime());
   });
@@ -158,8 +134,7 @@ describe('project archive requests', () => {
     await assert.rejects(
       archiveProject(otherFixture.owner.id, ownerFixture.project.id),
       (error: unknown) =>
-        error instanceof ProjectAuthorizationError &&
-        error.code === 'PROJECT_ACCESS_DENIED',
+        error instanceof ProjectAuthorizationError && error.code === 'PROJECT_ACCESS_DENIED',
     );
 
     const project = await prisma.project.findUniqueOrThrow({
@@ -179,8 +154,7 @@ describe('project archive requests', () => {
     await assert.rejects(
       archiveProject(0, `missing-${randomUUID()}`),
       (error: unknown) =>
-        error instanceof ProjectAuthorizationError &&
-        error.code === 'PROJECT_ACCESS_DENIED',
+        error instanceof ProjectAuthorizationError && error.code === 'PROJECT_ACCESS_DENIED',
     );
   });
 });

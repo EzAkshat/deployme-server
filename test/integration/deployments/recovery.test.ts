@@ -53,9 +53,7 @@ describe('deployment recovery decisions', () => {
       });
     });
 
-    const timestamp = new Date(
-      Date.now() - (old ? 20 * 60 * 1_000 : 0),
-    );
+    const timestamp = new Date(Date.now() - (old ? 20 * 60 * 1_000 : 0));
 
     const deployment = await prisma.deployment.create({
       data: {
@@ -99,11 +97,7 @@ describe('deployment recovery decisions', () => {
       };
     }
 
-    function run(
-      getJob: (
-        id: string,
-      ) => Promise<RecoveryQueueJob | null | undefined>,
-    ) {
+    function run(getJob: (id: string) => Promise<RecoveryQueueJob | null | undefined>) {
       return reconcileDeploymentQueueItem(deployment.id, {
         ...POLICY,
         getJob: async (id) => {

@@ -16,10 +16,7 @@ const ACTIVE_STATUSES = ['PENDING', 'QUEUED', 'BUILDING'] as const;
 describe('deployment admission quotas', () => {
   const data = useTestData();
 
-  async function fixture(
-    t: TestContext,
-    kind: 'personal' | 'team' = 'personal',
-  ) {
+  async function fixture(t: TestContext, kind: 'personal' | 'team' = 'personal') {
     const owner = await data.createUser({ prefix: 'quota_owner' });
 
     const team =
@@ -35,9 +32,7 @@ describe('deployment admission quotas', () => {
     if (team) data.trackTeam(team.id);
 
     const projectIds: string[] = [];
-    const scopeKey = team
-      ? `team:${team.id}`
-      : `personal:${owner.id}`;
+    const scopeKey = team ? `team:${team.id}` : `personal:${owner.id}`;
 
     t.after(async () => {
       if (projectIds.length > 0) {
@@ -128,13 +123,9 @@ describe('deployment admission quotas', () => {
         ),
       );
 
-      const accepted = results.filter(
-        (result) => result.status === 'fulfilled',
-      );
+      const accepted = results.filter((result) => result.status === 'fulfilled');
 
-      const rejected = results.filter(
-        (result) => result.status === 'rejected',
-      );
+      const rejected = results.filter((result) => result.status === 'rejected');
 
       assert.equal(accepted.length, MAX_UNFINISHED_DEPLOYMENTS);
       assert.equal(rejected.length, 3);
@@ -162,14 +153,11 @@ describe('deployment admission quotas', () => {
     const f = await fixture(t);
 
     await prisma.deployment.createMany({
-      data: Array.from(
-        { length: MAX_UNFINISHED_DEPLOYMENTS },
-        (_, index) => ({
-          projectId: f.first.id,
-          commitSha: COMMIT_SHA,
-          status: ACTIVE_STATUSES[index % ACTIVE_STATUSES.length]!,
-        }),
-      ),
+      data: Array.from({ length: MAX_UNFINISHED_DEPLOYMENTS }, (_, index) => ({
+        projectId: f.first.id,
+        commitSha: COMMIT_SHA,
+        status: ACTIVE_STATUSES[index % ACTIVE_STATUSES.length]!,
+      })),
     });
 
     // Terminal deployments must not consume additional quota.
@@ -202,14 +190,11 @@ describe('deployment admission quotas', () => {
     const f = await fixture(t);
 
     await prisma.deployment.createMany({
-      data: Array.from(
-        { length: MAX_UNFINISHED_DEPLOYMENTS },
-        () => ({
-          projectId: f.first.id,
-          commitSha: COMMIT_SHA,
-          status: 'PENDING' as const,
-        }),
-      ),
+      data: Array.from({ length: MAX_UNFINISHED_DEPLOYMENTS }, () => ({
+        projectId: f.first.id,
+        commitSha: COMMIT_SHA,
+        status: 'PENDING' as const,
+      })),
     });
 
     await prisma.project.update({
@@ -229,10 +214,7 @@ describe('deployment admission quotas', () => {
       await admit(firstAccount.first.id);
     }
 
-    await assert.rejects(
-      () => admit(firstAccount.second.id),
-      isQuotaError,
-    );
+    await assert.rejects(() => admit(firstAccount.second.id), isQuotaError);
 
     const admitted = await admit(secondAccount.first.id);
     assert.equal(admitted.status, 'PENDING');
@@ -241,10 +223,7 @@ describe('deployment admission quotas', () => {
   it('rolls back a failed admission without consuming capacity', async (t) => {
     const f = await fixture(t);
 
-    await assert.rejects(
-      () => admit(f.first.id, true),
-      /Intentional transaction rollback/,
-    );
+    await assert.rejects(() => admit(f.first.id, true), /Intentional transaction rollback/);
 
     assert.equal(
       await prisma.deployment.count({

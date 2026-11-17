@@ -1,17 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import {
-  after,
-  afterEach,
-  beforeEach,
-  describe,
-  it,
-} from 'node:test';
+import { after, afterEach, beforeEach, describe, it } from 'node:test';
 
 import { prisma } from '../../../src/config/database.js';
-import {
-  claimProjectArchiveEvent,
-} from '../../../src/services/project-archive-outbox.js';
+import { claimProjectArchiveEvent } from '../../../src/services/project-archive-outbox.js';
 
 const NOW = new Date('2000-01-01T12:00:00.000Z');
 const LEASE_MS = 5 * 60_000;
@@ -103,16 +95,10 @@ describe('archive outbox event claims', () => {
 
     const before = await readEvent();
 
-    assert.equal(
-      await claimProjectArchiveEvent(randomUUID(), NOW),
-      null,
-    );
+    assert.equal(await claimProjectArchiveEvent(randomUUID(), NOW), null);
     assert.deepEqual(await readEvent(), before);
 
-    const result = await claimProjectArchiveEvent(
-      randomUUID(),
-      dueAt,
-    );
+    const result = await claimProjectArchiveEvent(randomUUID(), dueAt);
 
     assert.equal(result?.id, eventId);
     assert.equal(result?.attempts, 1);
@@ -130,10 +116,7 @@ describe('archive outbox event claims', () => {
 
     const before = await readEvent();
 
-    assert.equal(
-      await claimProjectArchiveEvent(randomUUID(), NOW),
-      null,
-    );
+    assert.equal(await claimProjectArchiveEvent(randomUUID(), NOW), null);
     assert.deepEqual(await readEvent(), before);
   });
 
@@ -148,10 +131,7 @@ describe('archive outbox event claims', () => {
     });
 
     const replacementToken = randomUUID();
-    const result = await claimProjectArchiveEvent(
-      replacementToken,
-      NOW,
-    );
+    const result = await claimProjectArchiveEvent(replacementToken, NOW);
 
     assert.deepEqual(result, {
       id: eventId,
@@ -178,18 +158,12 @@ describe('archive outbox event claims', () => {
 
     const before = await readEvent();
 
-    assert.equal(
-      await claimProjectArchiveEvent(randomUUID(), NOW),
-      null,
-    );
+    assert.equal(await claimProjectArchiveEvent(randomUUID(), NOW), null);
     assert.deepEqual(await readEvent(), before);
 
     // The SQL uses "< staleBefore", so it becomes eligible
     // once the lease is strictly older than five minutes.
-    const result = await claimProjectArchiveEvent(
-      randomUUID(),
-      new Date(NOW.getTime() + 1),
-    );
+    const result = await claimProjectArchiveEvent(randomUUID(), new Date(NOW.getTime() + 1));
 
     assert.equal(result?.id, eventId);
     assert.equal(result?.attempts, 2);
@@ -205,28 +179,18 @@ describe('archive outbox event claims', () => {
 
     const before = await readEvent();
 
-    assert.equal(
-      await claimProjectArchiveEvent(randomUUID(), NOW),
-      null,
-    );
+    assert.equal(await claimProjectArchiveEvent(randomUUID(), NOW), null);
     assert.deepEqual(await readEvent(), before);
   });
 
   it('allows only one concurrent caller to claim the same event', async () => {
     const tokens = [randomUUID(), randomUUID()];
 
-    const results = await Promise.all(
-      tokens.map((token) => claimProjectArchiveEvent(token, NOW)),
-    );
+    const results = await Promise.all(tokens.map((token) => claimProjectArchiveEvent(token, NOW)));
 
-    assert.equal(
-      results.filter((result) => result !== null).length,
-      1,
-    );
+    assert.equal(results.filter((result) => result !== null).length, 1);
 
-    const winnerIndex = results.findIndex(
-      (result) => result !== null,
-    );
+    const winnerIndex = results.findIndex((result) => result !== null);
     const winner = results[winnerIndex];
 
     assert.equal(winner?.id, eventId);

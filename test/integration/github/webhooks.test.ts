@@ -14,11 +14,7 @@ describe('GitHub webhook verification and delivery handling', () => {
   const app = express();
 
   // Match production: signature verification requires the original bytes.
-  app.use(
-    '/webhooks/github',
-    express.raw({ type: 'application/json' }),
-    githubWebhooksRouter,
-  );
+  app.use('/webhooks/github', express.raw({ type: 'application/json' }), githubWebhooksRouter);
 
   after(async () => {
     try {
@@ -39,23 +35,12 @@ describe('GitHub webhook verification and delivery handling', () => {
   function signature(body: string) {
     const secret = env.GITHUB_WEBHOOK_SECRET;
 
-    assert.ok(
-      secret,
-      'GITHUB_WEBHOOK_SECRET must be configured for these tests.',
-    );
+    assert.ok(secret, 'GITHUB_WEBHOOK_SECRET must be configured for these tests.');
 
-    return (
-      'sha256=' +
-      createHmac('sha256', secret).update(body, 'utf8').digest('hex')
-    );
+    return 'sha256=' + createHmac('sha256', secret).update(body, 'utf8').digest('hex');
   }
 
-  function send(
-    deliveryId: string,
-    event: string,
-    body: string,
-    signedBody = body,
-  ) {
+  function send(deliveryId: string, event: string, body: string, signedBody = body) {
     return request(app)
       .post('/webhooks/github')
       .set('Content-Type', 'application/json')
@@ -95,12 +80,7 @@ describe('GitHub webhook verification and delivery handling', () => {
   it('rejects a body changed after signing', async () => {
     const id = newDeliveryId();
 
-    const response = await send(
-      id,
-      'ping',
-      '{"zen":"modified"}',
-      '{"zen":"original"}',
-    );
+    const response = await send(id, 'ping', '{"zen":"modified"}', '{"zen":"original"}');
 
     assert.equal(response.status, 401);
     assert.equal(await read(id), null);
@@ -111,10 +91,7 @@ describe('GitHub webhook verification and delivery handling', () => {
     const response = await send(id, 'ping', '{"broken":');
 
     assert.equal(response.status, 400);
-    assert.equal(
-      response.body.error?.message,
-      'GitHub webhook body must contain valid JSON.',
-    );
+    assert.equal(response.body.error?.message, 'GitHub webhook body must contain valid JSON.');
     assert.equal(await read(id), null);
   });
 
@@ -140,10 +117,7 @@ describe('GitHub webhook verification and delivery handling', () => {
       const response = await pending.send(body);
 
       assert.equal(response.status, 400);
-      assert.equal(
-        response.body.error?.message,
-        'GitHub delivery and event headers are required.',
-      );
+      assert.equal(response.body.error?.message, 'GitHub delivery and event headers are required.');
       assert.equal(await read(id), null);
     }
   });
@@ -190,10 +164,7 @@ describe('GitHub webhook verification and delivery handling', () => {
       send(id, 'ping', body),
     ]);
 
-    assert.deepEqual(
-      responses.map((response) => response.status).sort(),
-      [200, 200, 202],
-    );
+    assert.deepEqual(responses.map((response) => response.status).sort(), [200, 200, 202]);
 
     for (const response of responses) {
       assert.equal(response.body.status, 'IGNORED');

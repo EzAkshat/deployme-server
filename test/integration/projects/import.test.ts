@@ -3,17 +3,11 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { describe, it, type TestContext } from 'node:test';
 
 import { prisma } from '../../../src/config/database.js';
-import {
-  importPersonalProject,
-  ProjectImportError,
-} from '../../../src/services/project-import.js';
-import {
-  MAX_UNFINISHED_DEPLOYMENTS,
-} from '../../../src/services/deployment-quota.js';
+import { importPersonalProject, ProjectImportError } from '../../../src/services/project-import.js';
+import { MAX_UNFINISHED_DEPLOYMENTS } from '../../../src/services/deployment-quota.js';
 import { useTestData } from '../../support/test-data.js';
 
-type ImportDependencies =
-  NonNullable<Parameters<typeof importPersonalProject>[3]>;
+type ImportDependencies = NonNullable<Parameters<typeof importPersonalProject>[3]>;
 
 const COMMIT_SHA = 'a'.repeat(40);
 
@@ -71,10 +65,7 @@ describe('personal project import idempotency', () => {
       });
     });
 
-    const installationId = randomInt(
-      1_000_000_000_000,
-      2_000_000_000_000,
-    );
+    const installationId = randomInt(1_000_000_000_000, 2_000_000_000_000);
 
     const installation = await prisma.gitHubAppInstallation.create({
       data: {
@@ -94,10 +85,7 @@ describe('personal project import idempotency', () => {
       slug: `import-${unique}`,
       subdomain: `import-${unique}`,
       installationId,
-      repositoryId: randomInt(
-        2_000_000_000_000,
-        3_000_000_000_000,
-      ),
+      repositoryId: randomInt(2_000_000_000_000, 3_000_000_000_000),
       owner: 'test-owner',
       repositoryName: `repo-${unique}`,
       commitSha: COMMIT_SHA,
@@ -195,26 +183,14 @@ describe('personal project import idempotency', () => {
   it('creates one import and replays it regardless of JSON property order', async (t) => {
     const f = await fixture(t);
 
-    const first = await importPersonalProject(
-      f.owner.id,
-      f.key,
-      f.input,
-      f.dependencies,
-    );
+    const first = await importPersonalProject(f.owner.id, f.key, f.input, f.dependencies);
 
     assert.equal(first.replayed, false);
     assert.equal(first.deployment.commitSha, COMMIT_SHA);
 
-    const reordered = Object.fromEntries(
-      Object.entries(f.input).reverse(),
-    );
+    const reordered = Object.fromEntries(Object.entries(f.input).reverse());
 
-    const replay = await importPersonalProject(
-      f.owner.id,
-      f.key,
-      reordered,
-      f.unavailableGitHub,
-    );
+    const replay = await importPersonalProject(f.owner.id, f.key, reordered, f.unavailableGitHub);
 
     assert.equal(replay.replayed, true);
     assert.equal(replay.project.id, first.project.id);
@@ -262,14 +238,8 @@ describe('personal project import idempotency', () => {
     ]);
 
     assert.equal(inspections, 2);
-    assert.equal(
-      results.filter((result) => result.replayed === false).length,
-      1,
-    );
-    assert.equal(
-      results.filter((result) => result.replayed === true).length,
-      1,
-    );
+    assert.equal(results.filter((result) => result.replayed === false).length, 1);
+    assert.equal(results.filter((result) => result.replayed === true).length, 1);
 
     assert.equal(results[0]?.project.id, results[1]?.project.id);
     assert.equal(results[0]?.deployment.id, results[1]?.deployment.id);
@@ -279,12 +249,7 @@ describe('personal project import idempotency', () => {
   it('rejects reuse of a key with different settings', async (t) => {
     const f = await fixture(t);
 
-    await importPersonalProject(
-      f.owner.id,
-      f.key,
-      f.input,
-      f.dependencies,
-    );
+    await importPersonalProject(f.owner.id, f.key, f.input, f.dependencies);
 
     await assert.rejects(
       () =>
@@ -306,12 +271,7 @@ describe('personal project import idempotency', () => {
   it('rejects replay after the imported project is archived', async (t) => {
     const f = await fixture(t);
 
-    const first = await importPersonalProject(
-      f.owner.id,
-      f.key,
-      f.input,
-      f.dependencies,
-    );
+    const first = await importPersonalProject(f.owner.id, f.key, f.input, f.dependencies);
 
     await prisma.project.update({
       where: { id: first.project.id },
@@ -319,13 +279,7 @@ describe('personal project import idempotency', () => {
     });
 
     await assert.rejects(
-      () =>
-        importPersonalProject(
-          f.owner.id,
-          f.key,
-          f.input,
-          f.unavailableGitHub,
-        ),
+      () => importPersonalProject(f.owner.id, f.key, f.input, f.unavailableGitHub),
       (error: unknown) =>
         error instanceof ProjectImportError &&
         error.status === 409 &&
@@ -338,32 +292,19 @@ describe('personal project import idempotency', () => {
   it('replays an existing import even when deployment capacity is full', async (t) => {
     const f = await fixture(t);
 
-    const first = await importPersonalProject(
-      f.owner.id,
-      f.key,
-      f.input,
-      f.dependencies,
-    );
+    const first = await importPersonalProject(f.owner.id, f.key, f.input, f.dependencies);
 
     await prisma.deployment.createMany({
-      data: Array.from(
-        { length: MAX_UNFINISHED_DEPLOYMENTS - 1 },
-        () => ({
-          projectId: first.project.id,
-          commitSha: COMMIT_SHA,
-          status: 'PENDING' as const,
-        }),
-      ),
+      data: Array.from({ length: MAX_UNFINISHED_DEPLOYMENTS - 1 }, () => ({
+        projectId: first.project.id,
+        commitSha: COMMIT_SHA,
+        status: 'PENDING' as const,
+      })),
     });
 
     const before = await f.counts();
 
-    const replay = await importPersonalProject(
-      f.owner.id,
-      f.key,
-      f.input,
-      f.unavailableGitHub,
-    );
+    const replay = await importPersonalProject(f.owner.id, f.key, f.input, f.unavailableGitHub);
 
     assert.equal(replay.replayed, true);
     assert.equal(replay.deployment.id, first.deployment.id);

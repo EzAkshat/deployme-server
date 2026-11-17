@@ -94,11 +94,7 @@ describe('deployment execution claims', () => {
           const result = lockResults[calls];
           calls += 1;
 
-          assert.notEqual(
-            result,
-            undefined,
-            'Unexpected extra queue-lock check.',
-          );
+          assert.notEqual(result, undefined, 'Unexpected extra queue-lock check.');
 
           return result!;
         },
@@ -117,7 +113,7 @@ describe('deployment execution claims', () => {
       });
     }
 
-    return { project, deployment, event, job, read };
+    return { owner, project, deployment, event, job, read };
   }
 
   it('claims a pending deployment and records ownership', async (t) => {
@@ -125,10 +121,7 @@ describe('deployment execution claims', () => {
     const job = f.job(1);
     const token = randomUUID();
 
-    assert.equal(
-      await claimDeploymentExecution(job.value, QUEUE_TOKEN, token),
-      true,
-    );
+    assert.equal(await claimDeploymentExecution(job.value, QUEUE_TOKEN, token), true);
 
     const current = await f.read();
 
@@ -147,17 +140,11 @@ describe('deployment execution claims', () => {
     const oldToken = randomUUID();
     const newToken = randomUUID();
 
-    assert.equal(
-      await claimDeploymentExecution(f.job(1).value, QUEUE_TOKEN, oldToken),
-      true,
-    );
+    assert.equal(await claimDeploymentExecution(f.job(1).value, QUEUE_TOKEN, oldToken), true);
 
     const first = await f.read();
 
-    assert.equal(
-      await claimDeploymentExecution(f.job(2).value, QUEUE_TOKEN, newToken),
-      true,
-    );
+    assert.equal(await claimDeploymentExecution(f.job(2).value, QUEUE_TOKEN, newToken), true);
 
     const replacement = await f.read();
 
@@ -171,11 +158,7 @@ describe('deployment execution claims', () => {
 
     for (const attempt of [1, 2]) {
       assert.equal(
-        await claimDeploymentExecution(
-          f.job(attempt, [1]).value,
-          QUEUE_TOKEN,
-          randomUUID(),
-        ),
+        await claimDeploymentExecution(f.job(attempt, [1]).value, QUEUE_TOKEN, randomUUID()),
         false,
       );
     }
@@ -188,9 +171,7 @@ describe('deployment execution claims', () => {
     const tokens = [randomUUID(), randomUUID()];
 
     const results = await Promise.all(
-      tokens.map((token) =>
-        claimDeploymentExecution(f.job(1).value, QUEUE_TOKEN, token),
-      ),
+      tokens.map((token) => claimDeploymentExecution(f.job(1).value, QUEUE_TOKEN, token)),
     );
 
     assert.equal(results.filter(Boolean).length, 1);
@@ -207,12 +188,7 @@ describe('deployment execution claims', () => {
     const before = await f.read();
 
     await assert.rejects(
-      () =>
-        claimDeploymentExecution(
-          f.job(1, [0]).value,
-          QUEUE_TOKEN,
-          randomUUID(),
-        ),
+      () => claimDeploymentExecution(f.job(1, [0]).value, QUEUE_TOKEN, randomUUID()),
       /ownership was lost before claiming/,
     );
 
@@ -222,21 +198,12 @@ describe('deployment execution claims', () => {
   it('rolls back a replacement claim when the second lock check fails', async (t) => {
     const f = await fixture(t);
 
-    await claimDeploymentExecution(
-      f.job(1).value,
-      QUEUE_TOKEN,
-      randomUUID(),
-    );
+    await claimDeploymentExecution(f.job(1).value, QUEUE_TOKEN, randomUUID());
 
     const before = await f.read();
 
     await assert.rejects(
-      () =>
-        claimDeploymentExecution(
-          f.job(2, [1, 0]).value,
-          QUEUE_TOKEN,
-          randomUUID(),
-        ),
+      () => claimDeploymentExecution(f.job(2, [1, 0]).value, QUEUE_TOKEN, randomUUID()),
       /ownership was lost during claiming/,
     );
 
@@ -255,12 +222,7 @@ describe('deployment execution claims', () => {
     job.value.data.commitSha = 'c'.repeat(40);
 
     await assert.rejects(
-      () =>
-        claimDeploymentExecution(
-          job.value,
-          QUEUE_TOKEN,
-          randomUUID(),
-        ),
+      () => claimDeploymentExecution(job.value, QUEUE_TOKEN, randomUUID()),
       /does not match its outbox event/,
     );
 
@@ -271,11 +233,7 @@ describe('deployment execution claims', () => {
   it('does not reclaim deployments in terminal states', async (t) => {
     const f = await fixture(t);
 
-    await claimDeploymentExecution(
-      f.job(1).value,
-      QUEUE_TOKEN,
-      randomUUID(),
-    );
+    await claimDeploymentExecution(f.job(1).value, QUEUE_TOKEN, randomUUID());
 
     for (const status of ['READY', 'FAILED', 'CANCELLED'] as const) {
       await prisma.deployment.update({
@@ -291,15 +249,85 @@ describe('deployment execution claims', () => {
       const before = await f.read();
 
       assert.equal(
-        await claimDeploymentExecution(
-          f.job(2, [1]).value,
-          QUEUE_TOKEN,
-          randomUUID(),
-        ),
+        await claimDeploymentExecution(f.job(2, [1]).value, QUEUE_TOKEN, randomUUID()),
         false,
       );
 
       assert.deepEqual(await f.read(), before);
     }
+  });
+  it('stops a queued personal deployment when its owner is suspended', async (t) => {
+    const f = await fixture(t);
+
+    await prisma.user.update({
+      where: { id: f.owner.id },
+      data: { suspendedAt: new Date() },
+    });
+
+    const job = f.job(1);
+
+    assert.equal(await claimDeploymentExecution(job.value, QUEUE_TOKEN, randomUUID()), false);
+
+    const current = await f.read();
+
+    assert.equal(current.status, 'FAILED');
+    assert.match(current.failureReason ?? '', /owner is suspended/);
+    assert.equal(current.processingToken, null);
+    assert.equal(current.processingStartedAt, null);
+    assert.equal(current.buildStartedAt, null);
+    assert.ok(current.buildFinishedAt);
+    assert.equal(job.lockChecks(), 2);
+
+    // Restoration must not revive this stopped deployment.
+    await prisma.user.update({
+      where: { id: f.owner.id },
+      data: { suspendedAt: null },
+    });
+
+    assert.equal(
+      await claimDeploymentExecution(f.job(2, [1]).value, QUEUE_TOKEN, randomUUID()),
+      false,
+    );
+
+    assert.deepEqual(await f.read(), current);
+  });
+
+  it('does not let a stale execution overwrite a newer claim during suspension', async (t) => {
+    const f = await fixture(t);
+    const currentToken = randomUUID();
+
+    assert.equal(await claimDeploymentExecution(f.job(2).value, QUEUE_TOKEN, currentToken), true);
+
+    await prisma.user.update({
+      where: { id: f.owner.id },
+      data: { suspendedAt: new Date() },
+    });
+
+    const before = await f.read();
+
+    assert.equal(
+      await claimDeploymentExecution(f.job(1, [1]).value, QUEUE_TOKEN, randomUUID()),
+      false,
+    );
+
+    assert.deepEqual(await f.read(), before);
+  });
+
+  it('rolls back a suspension stop when the queue lock is lost', async (t) => {
+    const f = await fixture(t);
+
+    await prisma.user.update({
+      where: { id: f.owner.id },
+      data: { suspendedAt: new Date() },
+    });
+
+    const before = await f.read();
+
+    await assert.rejects(
+      () => claimDeploymentExecution(f.job(1, [1, 0]).value, QUEUE_TOKEN, randomUUID()),
+      /ownership was lost during claiming/,
+    );
+
+    assert.deepEqual(await f.read(), before);
   });
 });

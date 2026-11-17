@@ -10,10 +10,7 @@ import {
   requireProjectPermission,
   ProjectAuthorizationError,
 } from '../../../src/services/project-authorization.js';
-import {
-  removeTeamMember,
-  leaveTeam,
-} from '../../../src/services/teams.js';
+import { removeTeamMember, leaveTeam } from '../../../src/services/teams.js';
 import { useTestData } from '../../support/test-data.js';
 
 describe('project authorization and membership cleanup', () => {
@@ -123,10 +120,7 @@ describe('project authorization and membership cleanup', () => {
 
       await f.grant(user.id);
 
-      assert.deepEqual(
-        await permissions(user.id, f.project.id),
-        fullAccess,
-      );
+      assert.deepEqual(await permissions(user.id, f.project.id), fullAccess);
     }
   });
 
@@ -149,10 +143,7 @@ describe('project authorization and membership cleanup', () => {
 
     await f.grant(f.member.id);
 
-    assert.deepEqual(
-      await permissions(f.member.id, f.project.id),
-      fullAccess,
-    );
+    assert.deepEqual(await permissions(f.member.id, f.project.id), fullAccess);
 
     await prisma.projectShare.deleteMany({
       where: { projectId: f.project.id, userId: f.member.id },
@@ -163,8 +154,7 @@ describe('project authorization and membership cleanup', () => {
     await assert.rejects(
       () => requireProjectPermission(f.member.id, f.project.id, 'VIEW'),
       (error: unknown) =>
-        error instanceof ProjectAuthorizationError &&
-        error.code === 'PROJECT_ACCESS_DENIED',
+        error instanceof ProjectAuthorizationError && error.code === 'PROJECT_ACCESS_DENIED',
     );
   });
 
@@ -193,11 +183,7 @@ describe('project authorization and membership cleanup', () => {
 
     await f.grant(f.member.id);
 
-    const result = await removeTeamMember(
-      f.team.id,
-      f.owner.id,
-      f.member.id,
-    );
+    const result = await removeTeamMember(f.team.id, f.owner.id, f.member.id);
 
     assert.equal(result.removedProjectShares, 1);
 
@@ -230,10 +216,7 @@ describe('project authorization and membership cleanup', () => {
 
     await f.grant(f.member.id);
 
-    assert.deepEqual(
-      await permissions(f.member.id, f.project.id),
-      fullAccess,
-    );
+    assert.deepEqual(await permissions(f.member.id, f.project.id), fullAccess);
   });
 
   it('cleans project shares when a member leaves voluntarily', async (t) => {
@@ -279,19 +262,13 @@ describe('project authorization and membership cleanup', () => {
     const f = await fixture(t);
     const personal = await f.createProject(true);
 
-    assert.deepEqual(
-      await permissions(f.owner.id, personal.id),
-      fullAccess,
-    );
+    assert.deepEqual(await permissions(f.owner.id, personal.id), fullAccess);
 
     for (const user of [f.manager, f.member]) {
       assert.deepEqual(await permissions(user.id, personal.id), denied);
     }
 
-    assert.deepEqual(
-      await permissions(f.owner.id, `missing-${randomUUID()}`),
-      denied,
-    );
+    assert.deepEqual(await permissions(f.owner.id, `missing-${randomUUID()}`), denied);
 
     await prisma.project.update({
       where: { id: personal.id },

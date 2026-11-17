@@ -8,12 +8,8 @@ import {
   reconcileDeploymentRoute,
   type DeploymentRoutingStorage,
 } from '../../../src/services/deployment-routing.js';
-import {
-  disableArchivedProjectRoute,
-} from '../../../src/services/project-route-disable.js';
-import type {
-  StoredDeliveryRoute,
-} from '../../../src/services/delivery-route-storage.js';
+import { disableArchivedProjectRoute } from '../../../src/services/project-route-disable.js';
+import type { StoredDeliveryRoute } from '../../../src/services/delivery-route-storage.js';
 
 describe('archive delivery routing protection', () => {
   let ownerId: number | undefined;
@@ -44,8 +40,7 @@ describe('archive delivery routing protection', () => {
     projectId = project.id;
 
     deploymentId = `test-${suffix}`;
-    artifactPrefix =
-      `projects/${projectId}/deployments/${deploymentId}/${randomUUID()}/`;
+    artifactPrefix = `projects/${projectId}/deployments/${deploymentId}/${randomUUID()}/`;
 
     await prisma.deployment.create({
       data: {
@@ -104,11 +99,7 @@ describe('archive delivery routing protection', () => {
     await archive();
 
     assert.equal(
-      await reconcileDeploymentRoute(
-        deploymentId,
-        projectId,
-        unexpectedStorage(),
-      ),
+      await reconcileDeploymentRoute(deploymentId, projectId, unexpectedStorage()),
       'inactive',
     );
   });
@@ -129,23 +120,19 @@ describe('archive delivery routing protection', () => {
     let reads = 0;
     let writes = 0;
 
-    const result = await reconcileDeploymentRoute(
-      deploymentId,
-      projectId,
-      {
-        async readDeliveryRoute() {
-          reads += 1;
-          return reads === 1 ? null : disabledRoute();
-        },
-        async writeDeliveryRoute(_subdomain, record, previousEtag) {
-          writes += 1;
-          assert.equal(previousEtag, null);
-          assert.ok('deploymentId' in record);
-          // Simulate archival creating a tombstone before this write.
-          return false;
-        },
+    const result = await reconcileDeploymentRoute(deploymentId, projectId, {
+      async readDeliveryRoute() {
+        reads += 1;
+        return reads === 1 ? null : disabledRoute();
       },
-    );
+      async writeDeliveryRoute(_subdomain, record, previousEtag) {
+        writes += 1;
+        assert.equal(previousEtag, null);
+        assert.ok('deploymentId' in record);
+        // Simulate archival creating a tombstone before this write.
+        return false;
+      },
+    });
 
     assert.equal(result, 'inactive');
     assert.equal(reads, 2);
@@ -247,5 +234,90 @@ describe('archive delivery routing protection', () => {
       disableArchivedProjectRoute(projectId, storage),
       /Disabled route belongs to another project/,
     );
+  });
+  it('does not publish a new route for a suspended personal owner', async () => {
+    assert.ok(ownerId !== undefined);
+
+    await prisma.user.update({
+      where: { id: ownerId },
+      data: { suspendedAt: new Date() },
+    });
+
+    let writes = 0;
+
+    const result = await reconcileDeploymentRoute(deploymentId, projectId, {
+      async readDeliveryRoute() {
+        return null;
+      },
+      async writeDeliveryRoute() {
+        writes += 1;
+        return true;
+      },
+    });
+
+    assert.equal(result, 'suspended');
+    assert.equal(writes, 0);
+  });
+
+  it('rechecks suspension after reading storage and before publishing', async () => {
+    assert.ok(ownerId !== undefined);
+    const accountId = ownerId;
+    let reads = 0;
+    let writes = 0;
+
+    const result = await reconcileDeploymentRoute(deploymentId, projectId, {
+      async readDeliveryRoute() {
+        reads += 1;
+
+        // Suspension commits after the initial deployment lookup.
+        await prisma.user.update({
+          where: { id: accountId },
+          data: { suspendedAt: new Date() },
+        });
+
+        return null;
+      },
+      async writeDeliveryRoute() {
+        writes += 1;
+        return true;
+      },
+    });
+
+    assert.equal(result, 'suspended');
+    assert.equal(reads, 1);
+    assert.equal(writes, 0);
+  });
+
+  it('leaves an already-published matching route unchanged during suspension', async () => {
+    assert.ok(ownerId !== undefined);
+
+    await prisma.user.update({
+      where: { id: ownerId },
+      data: { suspendedAt: new Date() },
+    });
+
+    const existing: StoredDeliveryRoute = {
+      etag: '"already-published"',
+      record: {
+        version: 1,
+        artifactPrefix,
+        spaFallback: false,
+      },
+    };
+
+    let writes = 0;
+
+    const result = await reconcileDeploymentRoute(deploymentId, projectId, {
+      async readDeliveryRoute() {
+        return existing;
+      },
+      async writeDeliveryRoute() {
+        writes += 1;
+        return true;
+      },
+    });
+
+    assert.equal(result, 'unchanged');
+    assert.equal(writes, 0);
   });
 });

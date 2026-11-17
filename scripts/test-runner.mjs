@@ -110,11 +110,7 @@ if (mode === 'migrate') {
     throw new Error('The migrate command does not accept extra arguments.');
   }
 
-  args = [
-    path.join(root, 'node_modules/prisma/build/index.js'),
-    'migrate',
-    'deploy',
-  ];
+  args = [path.join(root, 'node_modules/prisma/build/index.js'), 'migrate', 'deploy'];
 } else {
   const modes = new Set(['serial', 'parallel', 'unit', 'integration']);
 
@@ -129,14 +125,10 @@ if (mode === 'migrate') {
         ? ['test/integration']
         : ['test/unit', 'test/integration'];
 
-  let files = directories.flatMap((directory) =>
-    collectTests(path.join(root, directory)),
-  );
+  let files = directories.flatMap((directory) => collectTests(path.join(root, directory)));
 
   if (extra.length > 0) {
-    const requested = new Set(
-      extra.map((filename) => path.resolve(root, filename)),
-    );
+    const requested = new Set(extra.map((filename) => path.resolve(root, filename)));
     const available = new Set(files);
 
     for (const filename of requested) {
@@ -161,9 +153,7 @@ if (mode === 'migrate') {
   ];
 }
 
-console.log(
-  `[tests] ${mode}: PostgreSQL 127.0.0.1:55432/deployme_test; Redis 127.0.0.1:56379/0`,
-);
+console.log(`[tests] ${mode}: PostgreSQL 127.0.0.1:55432/deployme_test; Redis 127.0.0.1:56379/0`);
 
 const result = spawnSync(process.execPath, args, {
   cwd: root,

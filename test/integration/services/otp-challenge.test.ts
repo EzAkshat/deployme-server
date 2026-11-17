@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { prisma } from '../../../src/config/database.js';
-import { createOtpChallenge, verifyOtpChallenge, verifyOtpAndGetOrCreateUser } from '../../../src/services/otp-challenge.js';
+import {
+  createOtpChallenge,
+  verifyOtpChallenge,
+  verifyOtpAndGetOrCreateUser,
+} from '../../../src/services/otp-challenge.js';
 import { MAX_OTP_ATTEMPTS } from '../../support/constants.js';
 import { differentCode } from '../../support/auth-flow.js';
 import { useTestData } from '../../support/test-data.js';
@@ -75,13 +79,11 @@ describe('OTP challenge service', () => {
 
     assert.equal(stored?.attemptCount, MAX_OTP_ATTEMPTS);
   });
-    it('accepts a correct code only once under concurrent verification', async () => {
+  it('accepts a correct code only once under concurrent verification', async () => {
     const { email, challenge, code } = await newChallenge();
 
     const results = await Promise.all(
-      Array.from({ length: 5 }, () =>
-        verifyOtpChallenge(challenge.id, email, code),
-      ),
+      Array.from({ length: 5 }, () => verifyOtpChallenge(challenge.id, email, code)),
     );
 
     assert.equal(results.filter((result) => result === true).length, 1);
@@ -107,10 +109,7 @@ describe('OTP challenge service', () => {
 
     assert.ok(results.every((result) => result === null));
 
-    assert.equal(
-      await verifyOtpAndGetOrCreateUser(challenge.id, email, code),
-      null,
-    );
+    assert.equal(await verifyOtpAndGetOrCreateUser(challenge.id, email, code), null);
 
     const stored = await prisma.otpChallenge.findUniqueOrThrow({
       where: { id: challenge.id },
@@ -118,19 +117,14 @@ describe('OTP challenge service', () => {
 
     assert.equal(stored.attemptCount, MAX_OTP_ATTEMPTS);
     assert.ok(stored.consumedAt);
-    assert.equal(
-      await prisma.user.count({ where: { email } }),
-      0,
-    );
+    assert.equal(await prisma.user.count({ where: { email } }), 0);
   });
 
   it('allows one successful signup for concurrent use of the same challenge', async () => {
     const { email, challenge, code } = await newChallenge();
 
     const results = await Promise.all(
-      Array.from({ length: 5 }, () =>
-        verifyOtpAndGetOrCreateUser(challenge.id, email, code),
-      ),
+      Array.from({ length: 5 }, () => verifyOtpAndGetOrCreateUser(challenge.id, email, code)),
     );
 
     const accepted = results.filter((result) => result !== null);
